@@ -22,9 +22,14 @@ def _cmd_not_implemented(name: str) -> int:
     return 1
 
 
+def _usage_error(message: str) -> int:
+    print(f"error: {message}", file=sys.stderr)
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
+    # Omit prog= so usage reflects the invoked name (module or console script).
     parser = argparse.ArgumentParser(
-        prog="opportunity_ingest",
         description="CanadaBuys open tender → contract opportunities store",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -47,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-create",
         type=int,
         metavar="N",
-        help="Create-attempt budget for this run",
+        help="Create-attempt budget for this run (N>=1; 0=unlimited)",
     )
     run_p.add_argument(
         "--with-existing",
@@ -83,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "run":
+        # --with-existing is dry-run only (design contract).
+        if args.write and args.with_existing:
+            return _usage_error("--with-existing is only valid with dry-run (not --write)")
+        # N >= 1 = attempt budget; 0 = unlimited; negatives are invalid.
+        if args.max_create is not None and args.max_create < 0:
+            return _usage_error("--max-create must be >= 0 (0=unlimited)")
         return _cmd_not_implemented("run")
     if args.command == "download-sample":
         return _cmd_not_implemented("download-sample")
@@ -91,8 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-csv":
         return _cmd_not_implemented("export-csv")
 
-    parser.print_help()
-    return 2
+    raise AssertionError(f"unhandled command: {args.command!r}")
 
 
 if __name__ == "__main__":

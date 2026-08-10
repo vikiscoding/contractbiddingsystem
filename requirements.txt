@@ -1,4 +1,5 @@
-# Runtime dependencies — pins illustrative at scaffold; resolve via pip freeze as needed.
+# Runtime dependencies — keep floors in sync with [project] dependencies in pyproject.toml.
+# Pins illustrative at scaffold; resolve via pip freeze as needed.
 httpx>=0.27
 msal>=1.28
 PyYAML>=6.0

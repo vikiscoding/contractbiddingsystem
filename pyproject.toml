@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Contract Bidding System" }]
+# Keep floors in sync with requirements.txt.
 dependencies = [
     "httpx>=0.27",
     "msal>=1.28",
