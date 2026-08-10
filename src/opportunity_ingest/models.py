@@ -64,3 +64,19 @@ class OpportunityFields:
     def as_dict(self) -> dict[str, Any]:
         """Plain dict with logical schema keys (for create adapters / tests)."""
         return asdict(self)
+
+
+@dataclass(slots=True)
+class ExistingKeys:
+    """In-memory dedupe keys loaded from an OpportunityStore.
+
+    ``links`` must contain **normalized** links (strip, lower, trailing slash).
+    """
+
+    opportunity_ids: set[str]
+    links: set[str]
+
+    @classmethod
+    def empty(cls) -> ExistingKeys:
+        """Return empty key sets (useful for dry-run without ``--with-existing``)."""
+        return cls(opportunity_ids=set(), links=set())

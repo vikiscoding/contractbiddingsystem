@@ -1,6 +1,7 @@
 """Runtime settings from environment (pydantic-settings).
 
-Storage backends are selected here but not fully implemented until later PRs.
+``STORAGE_BACKEND`` selects the OpportunityStore implementation (default: sqlite).
+SharePoint backend is wired in a later PR; factory raises until then.
 """
 
 from __future__ import annotations
