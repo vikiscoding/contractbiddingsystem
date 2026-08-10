@@ -139,6 +139,26 @@ def test_empty_link_raises():
         )
 
 
+def test_empty_title_raises():
+    with pytest.raises(MapError, match="Title"):
+        map_to_opportunity_fields(
+            _tender(title=""),
+            _match(),
+            score=1,
+            now=NOW,
+        )
+
+
+def test_whitespace_only_title_raises():
+    with pytest.raises(MapError, match="Title"):
+        map_to_opportunity_fields(
+            _tender(title="   \t  "),
+            _match(),
+            score=1,
+            now=NOW,
+        )
+
+
 def test_empty_opportunity_id_raises():
     with pytest.raises(MapError, match="OpportunityID"):
         map_to_opportunity_fields(

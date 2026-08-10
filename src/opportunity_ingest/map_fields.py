@@ -58,7 +58,7 @@ def map_to_opportunity_fields(
         single_line_link_max: Hard limit only when enforce flag is True.
 
     Raises:
-        MapError: missing OpportunityID/Link, or Link exceeds enforced limit.
+        MapError: missing Title/OpportunityID/Link, or Link exceeds enforced limit.
     """
     if now is None:
         now = datetime.now(UTC)
@@ -81,7 +81,10 @@ def map_to_opportunity_fields(
     if not link.strip():
         raise MapError(f"Link is required for OpportunityID={opportunity_id!r}")
 
-    title = _truncate(tender.title or "", TITLE_MAX_LEN)
+    # Title is required on the logical schema; reject empty/whitespace after trim.
+    title = _truncate((tender.title or "").strip(), TITLE_MAX_LEN)
+    if not title:
+        raise MapError(f"Title is required for OpportunityID={opportunity_id!r}")
 
     description: str | None = None
     if tender.description:

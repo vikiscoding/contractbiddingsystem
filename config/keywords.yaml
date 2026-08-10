@@ -1,10 +1,17 @@
 # Engineering-owned keyword config for CanadaBuys open-tender filtering.
 # Ops requests changes via GitHub issues; eng reviews/merges.
 # Do not add bare "teams" or "strategy" — use multi-word / scoped terms only.
+#
+# Matching notes:
+# - Short terms (len <= short_term_max_len) use word-boundary regex.
+# - Unique-by-term weights; nested matches (e.g. "managed service" inside
+#   "managed services") keep the longest term only.
+# - Terms dual-listed across groups (e.g. "power automate") contribute one
+#   weight but attribute all declaring groups for diversity scoring.
 version: 1
 match:
   case_sensitive: false
-  fields: ["title", "description"]
+  fields: ["title", "description"]  # honored by loader (title | description)
   search_category: true
   short_term_max_len: 4
 
