@@ -1,0 +1,99 @@
+# Engineering-owned keyword config for CanadaBuys open-tender filtering.
+# Ops requests changes via GitHub issues; eng reviews/merges.
+# Do not add bare "teams" or "strategy" — use multi-word / scoped terms only.
+version: 1
+match:
+  case_sensitive: false
+  fields: ["title", "description"]
+  search_category: true
+  short_term_max_len: 4
+
+groups:
+  microsoft_cloud:
+    label: "Microsoft / M365 / Power Platform / Azure / Copilot"
+    keywords:
+      - { term: "microsoft 365", weight: 20 }
+      - { term: "microsoft365", weight: 20 }
+      - { term: "m365", weight: 18 }
+      - { term: "office 365", weight: 18 }
+      - { term: "o365", weight: 15 }
+      - { term: "sharepoint", weight: 16 }
+      - { term: "power platform", weight: 20 }
+      - { term: "power apps", weight: 18 }
+      - { term: "power automate", weight: 18 }
+      - { term: "power bi", weight: 14 }
+      - { term: "dynamics 365", weight: 16 }
+      - { term: "copilot", weight: 20 }
+      - { term: "azure", weight: 14 }
+      - { term: "entra id", weight: 12 }
+      - { term: "active directory", weight: 10 }
+      - { term: "microsoft teams", weight: 12 }
+
+  managed_services:
+    label: "Managed services"
+    keywords:
+      - { term: "managed service", weight: 16 }
+      - { term: "managed services", weight: 16 }
+      - { term: "msp", weight: 10 }
+      - { term: "managed it", weight: 14 }
+      - { term: "outsourcing", weight: 10 }
+      - { term: "service desk", weight: 14 }
+      - { term: "end user computing", weight: 12 }
+      - { term: "desktop support", weight: 12 }
+      - { term: "device management", weight: 12 }
+      - { term: "intune", weight: 14 }
+
+  itsm_servicenow:
+    label: "ITSM / ServiceNow"
+    keywords:
+      - { term: "servicenow", weight: 20 }
+      - { term: "service now", weight: 18 }
+      - { term: "itsm", weight: 16 }
+      - { term: "itil", weight: 12 }
+      - { term: "incident management", weight: 12 }
+      - { term: "service management", weight: 14 }
+      - { term: "cmdb", weight: 12 }
+
+  advisory_consulting:
+    label: "Advisory / Consulting (ops)"
+    keywords:
+      - { term: "management consulting", weight: 12 }
+      - { term: "advisory services", weight: 12 }
+      - { term: "professional services", weight: 10 }
+      - { term: "digital transformation", weight: 14 }
+      - { term: "operating model", weight: 12 }
+      - { term: "change management", weight: 10 }
+      - { term: "business analysis", weight: 10 }
+
+  automation_process:
+    label: "Automation / Process improvement"
+    keywords:
+      - { term: "automation", weight: 14 }
+      - { term: "rpa", weight: 14 }
+      - { term: "robotic process", weight: 16 }
+      - { term: "process improvement", weight: 14 }
+      - { term: "workflow automation", weight: 12 }
+      - { term: "orchestration", weight: 10 }
+      - { term: "low code", weight: 12 }
+      - { term: "no code", weight: 10 }
+      - { term: "power automate", weight: 18 }
+
+  ai_operations:
+    label: "AI + operations / AI governance"
+    keywords:
+      - { term: "artificial intelligence", weight: 16 }
+      - { term: "machine learning", weight: 14 }
+      - { term: "generative ai", weight: 18 }
+      - { term: "genai", weight: 16 }
+      - { term: "ai governance", weight: 18 }
+      - { term: "responsible ai", weight: 16 }
+      - { term: "llm", weight: 14 }
+      - { term: "ai operations", weight: 16 }
+      - { term: "mlops", weight: 14 }
+      - { term: "data governance", weight: 12 }
+
+category_boosts:
+  "*SRV": 5
+  "SRV": 5
+  "*SVRTGD": 3
+  "SVRTGD": 3

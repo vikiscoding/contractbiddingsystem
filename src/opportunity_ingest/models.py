@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,6 +13,7 @@ class TenderRecord:
 
     ``opportunity_id`` is derived: reference_number if set, else solicitation_number.
     Link is never truncated. Closing date, when present, is timezone-aware UTC.
+    Title is already EN-else-FR coalesced (same for buyer, description, link).
     """
 
     title: str
@@ -35,3 +37,30 @@ class TenderRecord:
         if self.solicitation_number:
             return self.solicitation_number
         return ""
+
+
+@dataclass(frozen=True, slots=True)
+class OpportunityFields:
+    """Logical Contract Opportunities schema (SQLite + SharePoint).
+
+    Field names match the storage/list columns. Link is full URL (never truncated).
+    """
+
+    Title: str
+    OpportunityID: str
+    Source: str
+    Buyer: str | None
+    Link: str
+    PublishedDate: date | None
+    ClosingDate: datetime | None
+    Category: str | None
+    Description: str | None
+    KeywordsMatched: str
+    RelevanceScore: int
+    Status: str
+    DateAdded: datetime
+    Notes: str
+
+    def as_dict(self) -> dict[str, Any]:
+        """Plain dict with logical schema keys (for create adapters / tests)."""
+        return asdict(self)
