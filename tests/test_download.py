@@ -61,30 +61,72 @@ def test_download_retries_once_then_succeeds():
 
 
 def test_download_fails_after_one_retry():
+    calls = {"n": 0}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
         return httpx.Response(500, text="error")
 
     with _mock_transport(handler) as client:
         with pytest.raises(DownloadError, match="after retry"):
             download_csv_bytes(client=client)
+    assert calls["n"] == 2
 
 
-def test_download_empty_content_raises():
+def test_download_empty_content_raises_after_retry():
+    calls = {"n": 0}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
         return httpx.Response(200, content=b"   \n")
 
     with _mock_transport(handler) as client:
         with pytest.raises(DownloadError, match="empty"):
             download_csv_bytes(client=client)
+    assert calls["n"] == 2
 
 
-def test_download_html_content_raises():
+def test_download_html_content_raises_after_retry():
+    calls = {"n": 0}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
         return httpx.Response(200, content=b"<!DOCTYPE html><html></html>")
 
     with _mock_transport(handler) as client:
         with pytest.raises(DownloadError, match="HTML"):
             download_csv_bytes(client=client)
+    assert calls["n"] == 2
+
+
+def test_download_bom_prefixed_html_raises():
+    """UTF-8 BOM before HTML must still be rejected as non-CSV."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, content=b"\xef\xbb\xbf<!DOCTYPE html><html></html>")
+
+    with _mock_transport(handler) as client:
+        with pytest.raises(DownloadError, match="HTML"):
+            download_csv_bytes(client=client)
+    assert calls["n"] == 2
+
+
+def test_download_empty_then_success_on_retry():
+    calls = {"n": 0}
+    body = b"a,b\n1,2\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, content=b"")
+        return httpx.Response(200, content=body)
+
+    with _mock_transport(handler) as client:
+        raw = download_csv_bytes(client=client)
+    assert raw == body
+    assert calls["n"] == 2
 
 
 def test_download_respects_url_override(monkeypatch):
@@ -109,6 +151,17 @@ def test_download_respects_url_override(monkeypatch):
     with _mock_transport(handler2) as client:
         download_csv_bytes(client=client)
     assert seen == ["https://example.test/from-env.csv"]
+
+
+def test_invalid_http_timeout_env_raises_download_error(monkeypatch):
+    monkeypatch.setenv("HTTP_TIMEOUT_SECONDS", "not-a-number")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"a,b\n")
+
+    with _mock_transport(handler) as client:
+        with pytest.raises(DownloadError, match="HTTP_TIMEOUT_SECONDS"):
+            download_csv_bytes(client=client)
 
 
 def test_download_to_path(tmp_path: Path):

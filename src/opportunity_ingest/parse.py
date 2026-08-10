@@ -8,7 +8,6 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence, TextIO
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from opportunity_ingest.models import TenderRecord
 
@@ -43,11 +42,8 @@ REQUIRED_HEADER_GROUPS: dict[str, tuple[str, ...]] = {
     "notice_url": ("link_eng", "link_fra"),
 }
 
-try:
-    _TORONTO_TZ = ZoneInfo("America/Toronto")
-except ZoneInfoNotFoundError:  # pragma: no cover - Windows without tzdata
-    _TORONTO_TZ = timezone(timedelta(hours=-5))
-
+# Design: naive CanadaBuys closing times are treated as fixed UTC-0500 (not DST-aware).
+CANADABUYS_NAIVE_TZ = timezone(timedelta(hours=-5))
 UTC = timezone.utc
 
 
@@ -56,7 +52,8 @@ class ParseError(Exception):
 
 
 def _normalize_header(name: str) -> str:
-    return name.strip().lower()
+    # Defensive: strip UTF-8 BOM if text was decoded without utf-8-sig.
+    return name.lstrip("\ufeff").strip().lower()
 
 
 def resolve_headers(fieldnames: Sequence[str] | None) -> dict[str, str]:
@@ -111,7 +108,7 @@ def coalesce_en_fr(eng: str, fra: str) -> str:
 
 
 def parse_closing_date(raw: str) -> datetime | None:
-    """Parse closing date; naive values treated as America/Toronto (or UTC-0500).
+    """Parse closing date; naive values treated as fixed UTC-0500 (design).
 
     Returns timezone-aware UTC datetime, or None if empty/unparseable.
     """
@@ -151,7 +148,7 @@ def parse_closing_date(raw: str) -> datetime | None:
         return None
 
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_TORONTO_TZ)
+        dt = dt.replace(tzinfo=CANADABUYS_NAIVE_TZ)
     return dt.astimezone(UTC)
 
 
@@ -244,7 +241,9 @@ def parse_csv_file(path: str | Path) -> list[TenderRecord]:
 
 
 def parse_csv_text(text: str) -> list[TenderRecord]:
-    """Parse CSV content already decoded (BOM should be stripped if present)."""
+    """Parse CSV content (BOM on the first header is tolerated)."""
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
     return parse_csv_stream(io.StringIO(text))
 
 

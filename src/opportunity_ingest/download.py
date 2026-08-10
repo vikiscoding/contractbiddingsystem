@@ -1,4 +1,8 @@
-"""Download CanadaBuys open tender notice CSV (UTF-8 BOM, one retry)."""
+"""Download CanadaBuys open tender notice CSV (UTF-8 BOM, one retry).
+
+Retry policy: one retry on transport/HTTP failures **and** on content sanity
+failures (empty body, HTML-looking body), then hard-fail with ``DownloadError``.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ DEFAULT_CSV_URL = (
 )
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_SAMPLE_PATH = Path("data/sample-openTenderNotice.csv")
+_UTF8_BOM = b"\xef\xbb\xbf"
 
 
 class DownloadError(Exception):
@@ -32,15 +37,20 @@ def _resolve_timeout(timeout: float | None) -> float:
         return timeout
     raw = os.environ.get("HTTP_TIMEOUT_SECONDS")
     if raw:
-        return float(raw)
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise DownloadError(
+                f"Invalid HTTP_TIMEOUT_SECONDS value: {raw!r} (expected a number)"
+            ) from exc
     return DEFAULT_TIMEOUT_SECONDS
 
 
 def _sanity_check_content(content: bytes) -> None:
     if not content or not content.strip():
         raise DownloadError("Downloaded CSV is empty")
-    # Reject obvious non-CSV / HTML error pages
-    head = content.lstrip()[:200].lower()
+    # Strip leading BOM then whitespace so BOM-prefixed HTML error pages are caught.
+    head = content.removeprefix(_UTF8_BOM).lstrip()[:200].lower()
     if head.startswith(b"<!doctype") or head.startswith(b"<html"):
         raise DownloadError("Downloaded content looks like HTML, not CSV")
 
@@ -51,7 +61,7 @@ def download_csv_bytes(
     timeout: float | None = None,
     client: httpx.Client | None = None,
 ) -> bytes:
-    """GET open-tender CSV bytes. One retry on failure, then raise.
+    """GET open-tender CSV bytes. One retry on failure (transport or content), then raise.
 
     Decodes as UTF-8 with BOM only when writing text; raw bytes preserve BOM for
     ``utf-8-sig`` consumers.
@@ -78,9 +88,7 @@ def download_csv_bytes(
                 _sanity_check_content(content)
                 logger.info("Downloaded %s bytes", len(content))
                 return content
-            except DownloadError:
-                raise
-            except Exception as exc:  # network / HTTP errors
+            except Exception as exc:  # network / HTTP / content sanity
                 last_exc = exc
                 logger.warning(
                     "Download attempt %s/2 failed: %s",
@@ -94,6 +102,8 @@ def download_csv_bytes(
         if owns_client:
             client.close()
 
+    if isinstance(last_exc, DownloadError):
+        raise DownloadError(f"Failed to download CSV after retry: {last_exc}") from last_exc
     raise DownloadError(f"Failed to download CSV after retry: {last_exc}") from last_exc
 
 

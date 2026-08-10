@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from opportunity_ingest.parse import (
+    CANADABUYS_NAIVE_TZ,
     ParseError,
     coalesce_en_fr,
     parse_closing_date,
@@ -34,6 +35,17 @@ def test_resolve_headers_bilingual_and_case_insensitive():
     assert headers["title_fra"] == "title-titre-fra"
     assert headers["reference_number"] == "referenceNumber-numeroReference"
     assert headers["link_eng"] == "noticeURL-URLavis-eng"
+
+
+def test_resolve_headers_strips_bom_on_first_field():
+    fieldnames = [
+        "\ufefftitle-titre-eng",
+        "referenceNumber-numeroReference",
+        "noticeURL-URLavis-eng",
+    ]
+    headers = resolve_headers(fieldnames)
+    assert headers["title_eng"] == "\ufefftitle-titre-eng"
+    assert "title_eng" in headers
 
 
 def test_resolve_headers_missing_title_group_hard_fails():
@@ -128,17 +140,14 @@ def test_link_never_truncated():
     assert eng.link.endswith("never-be-truncated-even-if-it-is-quite-long")
 
 
-def test_closing_date_naive_as_toronto_stored_utc():
-    # Naive values are localized to America/Toronto (or UTC-0500 fallback) then stored UTC.
-    import opportunity_ingest.parse as parse_mod
-
+def test_closing_date_naive_as_fixed_utc_minus_5():
+    # Design: naive CanadaBuys times are fixed UTC-0500 (not DST-aware).
+    # 2026-09-15 17:00:00 UTC-05 → 2026-09-15 22:00:00 UTC (deterministic on all hosts).
     dt = parse_closing_date("2026-09-15 17:00:00")
     assert dt is not None
     assert dt.tzinfo is not None
-    expected = datetime(2026, 9, 15, 17, 0, 0, tzinfo=parse_mod._TORONTO_TZ).astimezone(
-        timezone.utc
-    )
-    assert dt == expected
+    assert CANADABUYS_NAIVE_TZ.utcoffset(None).total_seconds() == -5 * 3600
+    assert dt == datetime(2026, 9, 15, 22, 0, 0, tzinfo=timezone.utc)
 
 
 def test_closing_date_aware_preserved_as_utc():
@@ -159,17 +168,15 @@ def test_parse_csv_text_roundtrip_headers():
     assert len(records) == 3
 
 
-def test_bom_decoded_utf8_sig():
-    # Simulate file written with UTF-8 BOM
+def test_bom_decoded_utf8_sig(tmp_path: Path):
     raw = SAMPLE.read_bytes()
-    bom_text = raw.decode("utf-8-sig")
-    # Also ensure parse_csv_file handles BOM via utf-8-sig open
-    bom_path = FIXTURES / "_tmp_bom.csv"
-    try:
-        bom_path.write_bytes(b"\xef\xbb\xbf" + raw)
-        records = parse_csv_file(bom_path)
-        assert len(records) == 3
-        assert bom_text  # silence unused if rewrite
-    finally:
-        if bom_path.exists():
-            bom_path.unlink()
+    bom_path = tmp_path / "with_bom.csv"
+    bom_path.write_bytes(b"\xef\xbb\xbf" + raw)
+    records = parse_csv_file(bom_path)
+    assert len(records) == 3
+
+
+def test_parse_csv_text_with_leading_bom_char():
+    text = "\ufeff" + SAMPLE.read_text(encoding="utf-8")
+    records = parse_csv_text(text)
+    assert len(records) == 3
