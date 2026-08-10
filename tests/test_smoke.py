@@ -44,9 +44,9 @@ def test_cli_run_stub_returns_not_implemented():
     assert code == 1
 
 
-def test_cli_all_subcommands_stub_return_1():
+def test_cli_remaining_subcommands_stub_return_1():
+    # download-sample is implemented in this PR; others remain stubs.
     assert main(["run"]) == 1
-    assert main(["download-sample"]) == 1
     assert main(["check-store"]) == 1
     assert main(["export-csv"]) == 1
 

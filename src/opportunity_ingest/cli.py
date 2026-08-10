@@ -1,6 +1,6 @@
-"""CLI entry point — frozen subcommand contract (stubs only for scaffold).
+"""CLI entry point — frozen subcommand contract.
 
-Commands (implemented in later PRs):
+Commands:
   python -m opportunity_ingest run [--write | --dry-run] [--csv PATH]
       [--max-create N] [--with-existing]
   python -m opportunity_ingest download-sample [--out PATH]
@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+
+from opportunity_ingest.download import DEFAULT_SAMPLE_PATH, DownloadError, download_to_path
+from opportunity_ingest.logging_setup import setup_logging
 
 
 def _cmd_not_implemented(name: str) -> int:
@@ -25,6 +28,18 @@ def _cmd_not_implemented(name: str) -> int:
 def _usage_error(message: str) -> int:
     print(f"error: {message}", file=sys.stderr)
     return 2
+
+
+def cmd_download_sample(out_path: str | None) -> int:
+    """Download CanadaBuys open tender CSV to path (default data/sample-...)."""
+    setup_logging()
+    try:
+        path = download_to_path(out_path if out_path is not None else DEFAULT_SAMPLE_PATH)
+    except DownloadError as exc:
+        print(f"error: download failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Wrote {path}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,7 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
         "download-sample",
         help="Download a sample open-tender CSV for local fixtures",
     )
-    dl_p.add_argument("--out", dest="out_path", metavar="PATH", help="Output path for sample CSV")
+    dl_p.add_argument(
+        "--out",
+        dest="out_path",
+        metavar="PATH",
+        default=None,
+        help=f"Output path for sample CSV (default: {DEFAULT_SAMPLE_PATH})",
+    )
 
     # check-store
     sub.add_parser(
@@ -96,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
             return _usage_error("--max-create must be >= 0 (0=unlimited)")
         return _cmd_not_implemented("run")
     if args.command == "download-sample":
-        return _cmd_not_implemented("download-sample")
+        return cmd_download_sample(args.out_path)
     if args.command == "check-store":
         return _cmd_not_implemented("check-store")
     if args.command == "export-csv":
