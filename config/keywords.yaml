@@ -4,8 +4,10 @@
 #
 # Matching notes:
 # - Short terms (len <= short_term_max_len) use word-boundary regex.
-# - Unique-by-term weights; nested matches (e.g. "managed service" inside
-#   "managed services") keep the longest term only.
+# - Unique-by-term weights; nested overlaps are span-aware: a shorter term is
+#   dropped only when every hit is covered by a longer term's span (e.g.
+#   "managed service" inside "managed services"). Independent shorter hits
+#   still count (e.g. "workflow automation and general automation").
 # - Terms dual-listed across groups (e.g. "power automate") contribute one
 #   weight but attribute all declaring groups for diversity scoring.
 version: 1

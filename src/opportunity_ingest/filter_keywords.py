@@ -3,9 +3,11 @@
 Any-match: a row is a hit if any configured term matches. Short terms
 (len <= short_term_max_len) use word-boundary regex to avoid substring noise.
 
-Scoring uses unique matched term weights. When multiple matched terms nest
-(e.g. ``managed service`` inside ``managed services``), longest-match wins
-so nested singular/substring terms do not inflate the weight sum.
+Scoring uses unique matched term weights. Nested overlaps are resolved
+**span-aware**: a shorter term is dropped only when every match span is fully
+covered by a longer matched term's span (e.g. ``managed service`` inside
+``managed services``). Independent occurrences still count
+(e.g. ``workflow automation and general automation`` keeps both).
 
 A term listed in multiple groups contributes **one** weight but attributes
 **all** declaring groups (for multi-group diversity bonus).
@@ -57,7 +59,7 @@ class KeywordConfig:
 class KeywordMatchResult:
     """Outcome of filtering one tender.
 
-    ``terms`` are unique matched term strings after longest-match suppression
+    ``terms`` are unique matched term strings after span-aware nested suppression
     (stable first-seen order among survivors).
     ``groups`` are unique group ids from surviving terms (all declaring groups
     for dual-listed terms).
@@ -68,6 +70,10 @@ class KeywordMatchResult:
     terms: tuple[str, ...]
     groups: tuple[str, ...]
     weights: Mapping[str, int]
+
+
+# Inclusive-exclusive character span in the search blob: [start, end).
+Span = tuple[int, int]
 
 
 def _as_int(value: object, *, context: str) -> int:
@@ -222,17 +228,59 @@ def _search_blob(
     return "\n".join(parts)
 
 
-def suppress_nested_terms(terms: Sequence[str]) -> list[str]:
-    """Drop terms that are proper substrings of a longer matched term.
+def _span_contained(inner: Span, outer: Span) -> bool:
+    """True if ``inner`` lies entirely within ``outer`` (half-open intervals)."""
+    return outer[0] <= inner[0] and inner[1] <= outer[1]
 
-    Case-insensitive. Preserves first-seen order among survivors.
-    Unique-by-term is already assumed; this only removes nested overlaps
-    (e.g. ``managed service`` when ``managed services`` also matched).
+
+def suppress_nested_by_spans(
+    term_order: Sequence[str],
+    term_spans: Mapping[str, Sequence[Span]],
+) -> list[str]:
+    """Drop a term only when every match span is covered by a longer term.
+
+    A shorter term is kept if it has **any** independent occurrence whose
+    span is not fully nested inside a longer matched term's span.
+
+    Preserves first-seen order among survivors. Unique-by-term is assumed
+    (``term_order`` has no duplicates).
+    """
+    if len(term_order) <= 1:
+        return list(term_order)
+
+    kept: list[str] = []
+    for term in term_order:
+        spans = term_spans.get(term) or ()
+        if not spans:
+            continue
+        longer = [u for u in term_order if len(u) > len(term) and u in term_spans]
+        has_independent = False
+        for span in spans:
+            covered = False
+            for longer_term in longer:
+                for outer in term_spans[longer_term]:
+                    if _span_contained(span, outer):
+                        covered = True
+                        break
+                if covered:
+                    break
+            if not covered:
+                has_independent = True
+                break
+        if has_independent:
+            kept.append(term)
+    return kept
+
+
+def suppress_nested_terms(terms: Sequence[str]) -> list[str]:
+    """Legacy string-nesting helper (no blob spans).
+
+    Prefer :func:`suppress_nested_by_spans` for production matching. Kept for
+    simple unit tests of pure term-string nesting without a search blob.
     """
     if len(terms) <= 1:
         return list(terms)
 
-    # Prefer longer terms; among equals keep all (different strings).
     by_len = sorted(terms, key=lambda t: len(t), reverse=True)
     kept_norm: list[str] = []
     kept_original: list[str] = []
@@ -255,23 +303,26 @@ def match_keywords(tender: TenderRecord, config: KeywordConfig) -> KeywordMatchR
         search_category=config.search_category,
     )
 
-    # term -> weight (first listing wins); term -> groups (all declaring groups)
+    # term -> weight (first listing wins); groups; all match spans in blob
     weights: dict[str, int] = {}
     term_order: list[str] = []
     term_groups: dict[str, list[str]] = {}
+    term_spans: dict[str, list[Span]] = {}
 
     for kt in config.terms:
-        if not kt.pattern.search(blob):
-            continue
-        if kt.term not in weights:
+        if kt.term not in term_spans:
+            spans = [(m.start(), m.end()) for m in kt.pattern.finditer(blob)]
+            if not spans:
+                continue
+            term_spans[kt.term] = spans
             weights[kt.term] = kt.weight
             term_order.append(kt.term)
             term_groups[kt.term] = []
         # Dual-listed terms: attribute every declaring group (one weight).
-        if kt.group not in term_groups[kt.term]:
+        if kt.term in term_spans and kt.group not in term_groups[kt.term]:
             term_groups[kt.term].append(kt.group)
 
-    kept_terms = suppress_nested_terms(term_order)
+    kept_terms = suppress_nested_by_spans(term_order, term_spans)
     kept_weights = {t: weights[t] for t in kept_terms}
 
     groups_order: list[str] = []

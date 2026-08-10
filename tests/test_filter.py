@@ -18,6 +18,7 @@ from opportunity_ingest.filter_keywords import (
     filter_tenders,
     load_keyword_config,
     match_keywords,
+    suppress_nested_by_spans,
     suppress_nested_terms,
 )
 from opportunity_ingest.models import TenderRecord
@@ -234,6 +235,43 @@ def test_longest_match_workflow_automation_suppresses_nested_automation():
     result = match_keywords(hit, cfg)
     assert result.terms == ("workflow automation",)
     assert sum(result.weights.values()) == 12
+
+
+def test_span_aware_keeps_independent_shorter_term():
+    """Standalone shorter term still scores when not nested in a longer span."""
+    cfg = _minimal_config(
+        [
+            ("automation", 14, "automation_process"),
+            ("workflow automation", 12, "automation_process"),
+        ]
+    )
+    hit = _tender(title="workflow automation and general automation consulting")
+    result = match_keywords(hit, cfg)
+    assert set(result.terms) == {"workflow automation", "automation"}
+    assert result.weights["workflow automation"] == 12
+    assert result.weights["automation"] == 14
+    assert sum(result.weights.values()) == 26
+
+
+def test_suppress_nested_by_spans_nested_only():
+    # "managed service" span fully inside "managed services"
+    term_order = ["managed service", "managed services"]
+    term_spans = {
+        "managed service": [(0, 15)],
+        "managed services": [(0, 16)],
+    }
+    assert suppress_nested_by_spans(term_order, term_spans) == ["managed services"]
+
+
+def test_suppress_nested_by_spans_independent_occurrence():
+    # First "automation" fully inside "workflow automation"; second is free.
+    term_order = ["automation", "workflow automation"]
+    term_spans = {
+        "workflow automation": [(0, 19)],
+        "automation": [(9, 19), (35, 45)],  # second span not covered
+    }
+    kept = suppress_nested_by_spans(term_order, term_spans)
+    assert kept == ["automation", "workflow automation"]
 
 
 def test_suppress_nested_terms_helper():
