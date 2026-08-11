@@ -5,9 +5,18 @@
 | **Document title** | Complete Implementation Schema — CanadaBuys Open Tender → Contract Opportunities Storage |
 | **Author** | _TBD_ |
 | **Date** | 10 August 2026 |
-| **Status** | Draft (rev 4 — user product decisions: local-first storage) |
+| **Status** | **Design history (rev 4)** — implemented; see as-built docs for current truth |
 | **Spec version** | Phase 1 Technical Specification v1.0 (adapted: storage backend pluggable) |
 | **Audience** | Engineers implementing Phase 1 in a greenfield repo |
+
+> **As-built supersedes this document on conflicts.**  
+> - LLM entry: [`../AGENTS.md`](../AGENTS.md)  
+> - Architecture now: [`AS_BUILT.md`](AS_BUILT.md)  
+> - Data rules: [`DATA_UPDATE_DIRECTIVES.md`](DATA_UPDATE_DIRECTIVES.md)  
+> - Change recipes: [`CHANGE_PLAYBOOK.md`](CHANGE_PLAYBOOK.md)  
+> - Index: [`INDEX.md`](INDEX.md)  
+>
+> **Post-design additions implemented in code:** browser User-Agent for CanadaBuys (anti-403), Google Sheets full-replace sync (`sync-sheets`, optional `[sheets]` extra), Windows `scripts/daily_sync.ps1`, consolidated LLM doc pack.
 
 ---
 

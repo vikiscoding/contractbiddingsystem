@@ -2,6 +2,8 @@
 
 **Not a day-1 gate.** Day-1 production uses `STORAGE_BACKEND=sqlite`. Follow this runbook only when you are ready to flip the pipeline to SharePoint.
 
+**Related:** [AGENTS.md](../AGENTS.md) · [DATA_UPDATE_DIRECTIVES](../docs/DATA_UPDATE_DIRECTIVES.md) §5 · [AS_BUILT](../docs/AS_BUILT.md) · [ops_runbook](ops_runbook.md)
+
 The SharePoint Graph adapter is already implemented (`SharePointOpportunityStore`). Activation is **config + secrets + one-time site grant** — no pipeline rewrite.
 
 Dual-write (SQLite + SharePoint) is **not** Phase 1. Switch backends; migrate data out-of-band if needed.

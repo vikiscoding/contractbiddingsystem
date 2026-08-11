@@ -20,6 +20,17 @@ DEFAULT_CSV_URL = (
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_SAMPLE_PATH = Path("data/sample-openTenderNotice.csv")
 _UTF8_BOM = b"\xef\xbb\xbf"
+# CanadaBuys CDN returns 403 without a browser-like User-Agent
+# (default httpx / bare Python clients are blocked).
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/csv,text/plain,*/*",
+    "Accept-Language": "en-CA,en;q=0.9",
+}
 
 
 class DownloadError(Exception):
@@ -70,7 +81,11 @@ def download_csv_bytes(
     resolved_timeout = _resolve_timeout(timeout)
     owns_client = client is None
     if owns_client:
-        client = httpx.Client(timeout=resolved_timeout, follow_redirects=True)
+        client = httpx.Client(
+            timeout=resolved_timeout,
+            follow_redirects=True,
+            headers=DEFAULT_HEADERS,
+        )
 
     assert client is not None
     last_exc: Exception | None = None
@@ -82,7 +97,9 @@ def download_csv_bytes(
                     attempt + 1,
                     resolved_url,
                 )
-                response = client.get(resolved_url)
+                # Always send headers: injected test clients may omit them;
+                # CanadaBuys returns 403 without a User-Agent.
+                response = client.get(resolved_url, headers=DEFAULT_HEADERS)
                 response.raise_for_status()
                 content = response.content
                 _sanity_check_content(content)

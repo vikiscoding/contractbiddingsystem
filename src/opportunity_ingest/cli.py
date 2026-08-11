@@ -6,6 +6,7 @@ Commands:
   python -m opportunity_ingest download-sample [--out PATH]
   python -m opportunity_ingest check-store
   python -m opportunity_ingest export-csv [--out PATH]
+  python -m opportunity_ingest sync-sheets [--sheet-id ID] [--tab NAME]
 
 Write gating: only ``--write`` persists. ``DRY_RUN`` env never enables write and
 does not disable ``--write``. Default (neither flag) is dry-run.
@@ -22,6 +23,7 @@ from opportunity_ingest.download import DEFAULT_SAMPLE_PATH, DownloadError, down
 from opportunity_ingest.exit_codes import EXIT_FAILURE, EXIT_USAGE
 from opportunity_ingest.logging_setup import setup_logging
 from opportunity_ingest.pipeline import resolve_write_mode, run_pipeline
+from opportunity_ingest.sheets_sync import SheetsSyncError, sync_sqlite_to_sheet
 from opportunity_ingest.storage.base import StoreError
 from opportunity_ingest.storage.factory import build_store
 from opportunity_ingest.storage.sqlite_store import SqliteOpportunityStore
@@ -179,6 +181,67 @@ def cmd_export_csv(
     return 0
 
 
+def cmd_sync_sheets(
+    sheet_id: str | None,
+    tab: str | None,
+    settings: Settings | None = None,
+) -> int:
+    """Full-replace a Google Sheets tab from SQLite (service account)."""
+    try:
+        settings = settings or get_settings()
+    except Exception as exc:
+        print(f"error: invalid settings: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    setup_logging(settings.log_level)
+
+    backend = (settings.storage_backend or "sqlite").strip().lower()
+    if backend != "sqlite":
+        print(
+            "error: sync-sheets requires STORAGE_BACKEND=sqlite "
+            f"(current={backend!r})",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    resolved_id = (sheet_id or settings.google_sheet_id or "").strip()
+    resolved_tab = (tab or settings.google_sheet_tab or "Ingest").strip()
+    if not resolved_id:
+        print(
+            "error: set --sheet-id or GOOGLE_SHEET_ID",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    try:
+        store = build_store(settings)
+    except (ValueError, NotImplementedError) as exc:
+        print(f"error: store config: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    if not isinstance(store, SqliteOpportunityStore):
+        print("error: sync-sheets requires SqliteOpportunityStore", file=sys.stderr)
+        return EXIT_FAILURE
+
+    sa_file = settings.google_service_account_file
+    sa_json = settings.google_service_account_json
+    try:
+        count = sync_sqlite_to_sheet(
+            store,
+            spreadsheet_id=resolved_id,
+            worksheet_title=resolved_tab,
+            service_account_file=sa_file,
+            service_account_json=sa_json,
+        )
+    except SheetsSyncError as exc:
+        print(f"error: sheets sync failed: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    except StoreError as exc:
+        print(f"error: store failed: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    print(f"Synced {count} rows to sheet {resolved_id} tab {resolved_tab!r}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Omit prog= so usage reflects the invoked name (module or console script).
     parser = argparse.ArgumentParser(
@@ -250,6 +313,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exp_p.add_argument("--out", dest="out_path", metavar="PATH", help="Output CSV path")
 
+    # sync-sheets [--sheet-id ID] [--tab NAME]
+    sh_p = sub.add_parser(
+        "sync-sheets",
+        help=(
+            "Full-replace a Google Sheets tab from SQLite "
+            "(service account; requires gspread/google-auth)"
+        ),
+    )
+    sh_p.add_argument(
+        "--sheet-id",
+        dest="sheet_id",
+        metavar="ID",
+        default=None,
+        help="Spreadsheet ID (default: GOOGLE_SHEET_ID env)",
+    )
+    sh_p.add_argument(
+        "--tab",
+        dest="tab",
+        metavar="NAME",
+        default=None,
+        help="Worksheet tab name to replace (default: Ingest / GOOGLE_SHEET_TAB)",
+    )
+
     return parser
 
 
@@ -271,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_check_store()
     if args.command == "export-csv":
         return cmd_export_csv(args.out_path)
+    if args.command == "sync-sheets":
+        return cmd_sync_sheets(args.sheet_id, args.tab)
 
     raise AssertionError(f"unhandled command: {args.command!r}")
 

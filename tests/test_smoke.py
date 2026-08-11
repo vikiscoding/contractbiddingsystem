@@ -26,7 +26,13 @@ def test_cli_parser_has_frozen_subcommands():
     ]
     assert len(subparsers_actions) == 1
     choices = set(subparsers_actions[0].choices.keys())
-    assert choices == {"run", "download-sample", "check-store", "export-csv"}
+    assert choices == {
+        "run",
+        "download-sample",
+        "check-store",
+        "export-csv",
+        "sync-sheets",
+    }
 
 
 def test_cli_help_exits_cleanly():

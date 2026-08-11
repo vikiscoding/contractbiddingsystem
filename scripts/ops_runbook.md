@@ -1,10 +1,24 @@
 # Ops runbook — CanadaBuys opportunity ingest
 
-Operator guide for day-1 SQLite storage, Status triage, calibration, create caps, keyword ownership, alerts, cache re-runs, SharePoint activation, and rollback.
+Operator guide for day-1 SQLite storage, Status triage, calibration, create caps, keyword ownership, alerts, cache re-runs, **Google Sheets view**, SharePoint activation, and rollback.
 
 **Audience:** operators who review opportunities and manage the daily schedule.  
 **Engineering owns:** `config/keywords.yaml`, pipeline code, GitHub workflow YAML.  
-**Related docs:** [README.md](../README.md), [scripts/provision_sharepoint_list.md](provision_sharepoint_list.md), [design schema](../docs/phase1-canadabuys-sharepoint-implementation-schema.md).
+**LLM / data rules:** [AGENTS.md](../AGENTS.md), [DATA_UPDATE_DIRECTIVES](../docs/DATA_UPDATE_DIRECTIVES.md), [AS_BUILT](../docs/AS_BUILT.md).  
+**Related:** [README.md](../README.md), [google_sheets_setup.md](google_sheets_setup.md), [provision_sharepoint_list.md](provision_sharepoint_list.md), [daily_sync.ps1](daily_sync.ps1).
+
+---
+
+## 0. Recommended daily flow
+
+```text
+1. run --write          → SQLite system of record (create-only)
+2. sync-sheets          → optional full-replace of Google tab "Ingest"
+3. export-csv           → optional Excel snapshot
+4. Human Status triage  → SQLite / export / Sheet Review tab (not Ingest if auto-synced)
+```
+
+Windows automation sample: [`daily_sync.ps1`](daily_sync.ps1) (Task Scheduler).
 
 ---
 
@@ -35,6 +49,18 @@ python -m opportunity_ingest export-csv --out data/export-opportunities.csv
 Open the CSV in Excel or Power BI. Sort by `RelevanceScore` (desc) and filter `Status = New` (or exclude `Discarded`).
 
 > `export-csv` is supported for `STORAGE_BACKEND=sqlite` only. SharePoint review uses the list UI after activation.
+
+### Google Sheets view (optional)
+
+```bash
+pip install -e ".[sheets]"
+python -m opportunity_ingest sync-sheets
+```
+
+- Setup: [google_sheets_setup.md](google_sheets_setup.md)
+- **Ingest** tab is **full-replaced** every sync — put manual notes on a separate **Review** tab
+- SQLite remains system of record; Sheets is a derived view
+- Normative rules: [DATA_UPDATE_DIRECTIVES.md](../docs/DATA_UPDATE_DIRECTIVES.md) §3
 
 ### SQL triage (sqlite3)
 

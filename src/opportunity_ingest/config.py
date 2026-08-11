@@ -60,6 +60,24 @@ class Settings(BaseSettings):
     sharepoint_site_id: str | None = Field(default=None)
     sharepoint_list_id: str | None = Field(default=None)
 
+    # Google Sheets sync (optional free path: service account + Sheets API)
+    google_sheet_id: str | None = Field(
+        default=None,
+        description="Spreadsheet ID from the sheet URL",
+    )
+    google_sheet_tab: str = Field(
+        default="Ingest",
+        description="Worksheet tab name fully replaced on each sync",
+    )
+    google_service_account_file: Path | None = Field(
+        default=None,
+        description="Path to service account JSON key file",
+    )
+    google_service_account_json: str | None = Field(
+        default=None,
+        description="Inline service account JSON (e.g. GitHub secret)",
+    )
+
     @field_validator("storage_backend", mode="before")
     @classmethod
     def _normalize_backend(cls, v: object) -> object:
