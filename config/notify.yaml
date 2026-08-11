@@ -1,0 +1,34 @@
+# Teams / notification pipeline config (engineering-owned).
+# Loaded by opportunity_ingest when present; env vars override (see Settings).
+#
+# Ops alerts (hard fail / partial errors / zero-new streak) still use
+# TEAMS_WEBHOOK_URL via notify_ingest_alert.
+#
+# Match alerts: when NEW opportunities clear the score bar, post a channel
+# Adaptive Card with summary + Open notice CTA links.
+version: 1
+
+teams:
+  # Master switch for match pings (ops alerts still follow TEAMS_WEBHOOK_URL).
+  match_notify_enabled: true
+
+  # Score threshold 0–100 (40 = "above 40% match" on our 0–100 scales).
+  # - ingest write path: rule RelevanceScore
+  # - interpret-rank path: Grok fit_score
+  match_score_threshold: 40
+
+  # Prefer TEAMS_MATCH_WEBHOOK_URL env for a dedicated capture channel;
+  # if unset, falls back to TEAMS_WEBHOOK_URL (same Workflows connector).
+  # use_ops_webhook_fallback: true  # always true in code when match URL empty
+
+  # Cap how many opportunities appear in one Teams card (rest summarized).
+  max_items_per_message: 8
+
+  # Truncate free-text fields for Adaptive Card readability.
+  title_max_chars: 120
+  summary_max_chars: 280
+
+  # Card branding
+  card_title_ingest: "New opportunity matches (≥ threshold)"
+  card_title_rank: "Grok fit matches (≥ threshold)"
+  cta_label: "Open notice"

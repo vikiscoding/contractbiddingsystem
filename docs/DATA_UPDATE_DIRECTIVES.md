@@ -3,7 +3,7 @@
 **Normative rules for any agent or developer that writes, migrates, or syncs opportunity data.**  
 Violating these breaks dedupe, human review, or external views.
 
-Last updated: 2026-08-10.
+Last updated: 2026-08-11.
 
 ---
 
@@ -14,6 +14,8 @@ Last updated: 2026-08-10.
 | **SQLite** `data/contract_opportunities.db` | **System of record (day-1)** | `STORAGE_BACKEND=sqlite` |
 | **SharePoint list** | Alternate store when activated | `STORAGE_BACKEND=sharepoint` |
 | **Google Sheets `Ingest` tab** | **Derived view only** (full replace) | `sync-sheets` after writes |
+| **Google Sheets `Ranked` tab** | **Derived Grok ranking view** (full replace) | `interpret-rank` / `sync-rank-sheets` |
+| **`data/rankings/*`** | Local Grok reports (not SoR) | `interpret-rank` |
 | **CSV export** | Snapshot for Excel / import | `export-csv` |
 
 **MUST:** Treat SQLite (or active SharePoint backend) as authoritative for create/dedupe.  
@@ -34,6 +36,8 @@ Last updated: 2026-08-10.
 | `export-csv` | No store write; writes CSV file |
 | `sync-sheets` | No SQLite write; **replaces** Sheet tab |
 | `download-sample` | Writes sample CSV file only |
+| `interpret-rank` | **No SQLite write**; writes `data/rankings/*`; may full-replace Sheets **Ranked** tab |
+| `sync-rank-sheets` | **No SQLite write**; full-replace Sheets **Ranked** tab from ranking JSON |
 
 **MUST:** Use `--write` for persistence.  
 **MUST NOT:** Rely on `DRY_RUN` env to enable writes (it never does).
@@ -94,9 +98,21 @@ normalize_link(url) = strip → lower → rstrip('/')
 **MUST NOT:** Overwrite Status on later ingest.  
 **Human Status values:** `New` | `Reviewing` | `Relevant` | `Bidding` | `Discarded`.
 
+### 2.8 Grok interpret-rank (post-ingest)
+
+**MUST:** Treat AI ranking as a **derived report**, not the system of record.  
+**MUST NOT:** UPDATE `contract_opportunities` Status, Notes, RelevanceScore, Title, Description, or Link from Grok output.  
+**MUST:** Persist local interpret-rank files under `data/rankings/` (JSON + Markdown) or an explicit `--out-dir`.  
+**MUST:** Keep company objectives in engineering-owned `config/objectives.yaml` (not free-text secrets).  
+**MUST NOT:** Commit `XAI_API_KEY` or ranking report dumps that contain secrets.  
+**MUST:** Google Sheets ranking push targets the **Ranked** tab only (or another non-`Ingest` name via `GOOGLE_SHEET_RANK_TAB`).  
+**MUST NOT:** Write Grok rankings into the opportunity **`Ingest`** tab (code refuses this).
+
 ---
 
 ## 3. Google Sheets sync directives
+
+### 3.1 Opportunity tab (`sync-sheets`)
 
 Command: `python -m opportunity_ingest sync-sheets`
 
@@ -110,10 +126,20 @@ Command: `python -m opportunity_ingest sync-sheets`
 | **MUST** | File name exactly `*.json` (Windows double-extension `.json.json` is a known failure mode) |
 | **MUST** | Load `.env` from **repo root** (not `scripts/.env`) |
 
+### 3.2 Ranked tab (`interpret-rank` / `sync-rank-sheets`)
+
+| Rule | Detail |
+|------|--------|
+| **MUST** | Full **clear + rewrite** of target tab (default `Ranked` / `GOOGLE_SHEET_RANK_TAB`) |
+| **MUST** | Same spreadsheet + service account as opportunity sync (`GOOGLE_SHEET_ID`) |
+| **MUST NOT** | Target the `Ingest` tab for rankings |
+| **Default** | When `GOOGLE_SHEET_ID` is set, `interpret-rank` syncs Ranked unless `--no-sync-sheets` |
+| **Re-push** | `sync-rank-sheets` uses latest `data/rankings/interpret-*.json` (no Grok call) |
+
 **After ingest recommended sequence:**
 
 ```text
-run --write → sync-sheets → (optional) export-csv
+run --write → sync-sheets → (optional) interpret-rank → (optional) export-csv
 ```
 
 **MUST NOT:** Two-way sync Status from Sheets back to SQLite in Phase 1 (out of scope).

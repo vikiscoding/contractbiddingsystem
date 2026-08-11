@@ -6,7 +6,7 @@
 |-------|--------|
 | **Project** | Contract Bidding System — Phase 1 opportunity ingest |
 | **Package** | `opportunity_ingest` (`src/opportunity_ingest/`) |
-| **As-of** | 2026-08-10 (as-built; Google Sheets sync included) |
+| **As-of** | 2026-08-11 (as-built; Sheets sync + optional Grok interpret-rank) |
 | **Primary language** | Python 3.11+ |
 | **Default store** | SQLite (`STORAGE_BACKEND=sqlite`) |
 
@@ -24,8 +24,9 @@ Daily (or on-demand) pipeline:
 6. Dedupe by `OpportunityID` + normalized `Link`.
 7. **Create-only** writes to SQLite (default) or SharePoint (optional).
 8. Optional: export CSV, **full-replace sync to Google Sheets `Ingest` tab**, Teams alerts.
+9. Optional post-ingest: **Grok interpret-rank** — plain-English rewrite + fit ranking vs `config/objectives.yaml` (report only).
 
-**SQLite is the system of record for day-1.** Google Sheets is a **view** (overwritten on sync). SharePoint is a **pluggable store**, not required for go-live.
+**SQLite is the system of record for day-1.** Google Sheets is a **view** (overwritten on sync). SharePoint is a **pluggable store**, not required for go-live. Grok ranking writes reports under `data/rankings/`; it does **not** mutate store Status/Notes/RelevanceScore.
 
 ---
 
@@ -35,14 +36,17 @@ Daily (or on-demand) pipeline:
 |----------|------|---------|
 | 1 | **This file (`AGENTS.md`)** | Non-negotiable rules + orientation |
 | 2 | [`docs/STATUS.md`](docs/STATUS.md) | Living readiness snapshot (what works / next) |
-| 3 | [`docs/DATA_UPDATE_DIRECTIVES.md`](docs/DATA_UPDATE_DIRECTIVES.md) | **MUST / MUST NOT** for data writes, schema, sync |
-| 4 | [`docs/AS_BUILT.md`](docs/AS_BUILT.md) | Current architecture, modules, CLI, env |
-| 5 | [`docs/CHANGE_PLAYBOOK.md`](docs/CHANGE_PLAYBOOK.md) | How to implement common change types |
-| 6 | [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
-| 7 | [`docs/phase1-canadabuys-sharepoint-implementation-schema.md`](docs/phase1-canadabuys-sharepoint-implementation-schema.md) | Original design (rev 4); prefer AS_BUILT if conflict |
-| 8 | [`scripts/ops_runbook.md`](scripts/ops_runbook.md) | Human operator procedures |
-| 9 | [`scripts/google_sheets_setup.md`](scripts/google_sheets_setup.md) | Sheets service-account setup |
-| 10 | [`scripts/provision_sharepoint_list.md`](scripts/provision_sharepoint_list.md) | SharePoint activation (deferred) |
+| 3 | [`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md) | Human keys + plug-and-play steps for built features |
+| 4 | [`docs/DATA_UPDATE_DIRECTIVES.md`](docs/DATA_UPDATE_DIRECTIVES.md) | **MUST / MUST NOT** for data writes, schema, sync |
+| 5 | [`docs/AS_BUILT.md`](docs/AS_BUILT.md) | Current architecture, modules, CLI, env |
+| 6 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Roadmap / discussed but **not built** |
+| 7 | [`docs/CHANGE_PLAYBOOK.md`](docs/CHANGE_PLAYBOOK.md) | How to implement common change types |
+| 8 | [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
+| 9 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | ADR-style as-built decisions |
+| 10 | [`docs/phase1-canadabuys-sharepoint-implementation-schema.md`](docs/phase1-canadabuys-sharepoint-implementation-schema.md) | Original design (rev 4); prefer AS_BUILT if conflict |
+| 11 | [`scripts/ops_runbook.md`](scripts/ops_runbook.md) | Human operator procedures |
+| 12 | [`scripts/google_sheets_setup.md`](scripts/google_sheets_setup.md) | Sheets service-account setup |
+| 13 | [`scripts/provision_sharepoint_list.md`](scripts/provision_sharepoint_list.md) | SharePoint activation (deferred) |
 
 ---
 
@@ -56,8 +60,9 @@ Daily (or on-demand) pipeline:
 6. **CanadaBuys download requires browser-like User-Agent** (CDN returns 403 otherwise). See `download.py` `DEFAULT_HEADERS`.
 7. **Google Sheets `Ingest` tab is full-replace.** Manual edits on that tab are wiped next `sync-sheets`. Human work → separate tab (e.g. `Review`).
 8. **Keywords:** engineering owns `config/keywords.yaml`. Ops request changes via issues.
-9. **Secrets:** never commit `.env`, `secrets/`, service-account JSON, Azure secrets.
-10. **Phase 1 non-goals:** multi-source (MERX/etc.), AI ranking, auto-bidding, historical backfill, dual-write SQLite+SharePoint, two-way Sheets Status sync.
+9. **Secrets:** never commit `.env`, `secrets/`, service-account JSON, Azure secrets, `XAI_API_KEY`.
+10. **Phase 1 non-goals:** multi-source (MERX/etc.), auto-bidding, historical backfill, dual-write SQLite+SharePoint, two-way Sheets Status sync.
+11. **Grok interpret-rank is post-ingest only.** Never write AI fit scores into `contract_opportunities` Status/Notes/RelevanceScore. Objectives live in `config/objectives.yaml` (eng-owned).
 
 ---
 
@@ -75,15 +80,18 @@ src/opportunity_ingest/
   models.py           # TenderRecord, OpportunityFields, ExistingKeys
   config.py           # pydantic-settings
   state.py            # zero-new streak JSON
-  notify.py           # Teams Workflows Adaptive Card
+  notify.py           # Teams ops alerts + high-match capture cards (CTA links)
   exit_codes.py       # exit + notify matrix
   sheets_sync.py      # SQLite → Google Sheets full tab replace
+  interpret_rank.py   # Grok rephrase + fit rank (report only)
   storage/
     base.py           # OpportunityStore Protocol, normalize_link
     factory.py        # sqlite | sharepoint
     sqlite_store.py   # default backend + export_csv
     sharepoint_store.py  # Graph adapter (optional)
 config/keywords.yaml
+config/objectives.yaml   # company objectives for interpret-rank
+config/notify.yaml       # Teams match threshold / card limits
 .github/workflows/ci.yml
 .github/workflows/daily-canadabuys-ingest.yml
 ```
@@ -98,9 +106,11 @@ python -m opportunity_ingest download-sample [--out PATH]
 python -m opportunity_ingest check-store
 python -m opportunity_ingest export-csv [--out PATH]
 python -m opportunity_ingest sync-sheets [--sheet-id ID] [--tab NAME]
+python -m opportunity_ingest interpret-rank [--status STATUS] [--limit N] [--sync-sheets|--no-sync-sheets] [--rank-tab NAME]
+python -m opportunity_ingest sync-rank-sheets [--from-json PATH] [--rank-tab NAME]
 ```
 
-Optional install extras: `pip install -e ".[sheets]"` for Google Sheets; SharePoint uses core deps (`msal`, `httpx`).
+Optional install extras: `pip install -e ".[sheets]"` for Google Sheets; `pip install -e ".[ai]"` for Grok interpret-rank; SharePoint uses core deps (`msal`, `httpx`). Grok rankings sync to tab **`Ranked`** (never `Ingest`).
 
 ---
 
@@ -115,7 +125,9 @@ Optional install extras: `pip install -e ".[sheets]"` for Google Sheets; SharePo
 | Store schema | `sqlite_store.py` DDL + `models.OpportunityFields` + design schema |
 | Pipeline order / metrics | `pipeline.py` |
 | Exit / notify policy | `exit_codes.py`, `notify.py` |
-| Sheets sync | `sheets_sync.py`, `cli.py` `sync-sheets` |
+| Sheets sync (opportunities) | `sheets_sync.py`, `cli.py` `sync-sheets` → tab `Ingest` |
+| Sheets sync (Grok ranks) | `sheets_sync.py` `sync_rankings_to_sheet`, `interpret-rank --sync-sheets`, `sync-rank-sheets` → tab `Ranked` |
+| Grok interpret / rank | `interpret_rank.py`, `config/objectives.yaml`, `cli.py` `interpret-rank` |
 | SharePoint | `storage/sharepoint_store.py`, `scripts/provision_sharepoint_list.md` |
 | Daily schedule | `.github/workflows/daily-canadabuys-ingest.yml` |
 | Env vars | `config.py`, `.env.example`, `config/settings.example.env` |
@@ -128,6 +140,8 @@ Optional install extras: `pip install -e ".[sheets]"` for Google Sheets; SharePo
 |------|------|
 | `data/contract_opportunities.db` | SQLite system of record |
 | `data/sample-openTenderNotice.csv` | Downloaded open-tender sample |
+| `data/rankings/interpret-*.md` | Grok ranked brief (human) |
+| `data/rankings/interpret-*.json` | Grok ranked brief (machine) |
 | `data/export-opportunities.csv` | Human CSV export |
 | `state/zero_new_streak.json` | Zero-new calendar streak |
 | `logs/run-*.json` | Per-run metrics |

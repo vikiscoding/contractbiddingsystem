@@ -1,0 +1,116 @@
+# Engineering-owned company objectives for Grok-assisted interpret-rank.
+# Source of truth for WHO we are: Atlas Flow Group public site (crawled 2026-08-11).
+#   https://atlasflowgroupwebsite.vikrant-singh1.workers.dev/
+#   Pages: /, /services, /approach, /about, /contact
+# Align keyword groups in config/keywords.yaml with these objectives.
+#
+# Used by: python -m opportunity_ingest interpret-rank
+# This file does NOT change ingest scoring; it frames AI ranking only.
+version: 2
+
+company:
+  name: "Atlas Flow Group"
+  website: "https://atlasflowgroupwebsite.vikrant-singh1.workers.dev/"
+  email: "hello@atlasflowgroup.com"
+  summary: >
+    SMB-focused advisory and Microsoft-native enablement firm. We design
+    operating systems where people hold authority, AI assists without taking
+    control, and every material decision is traceable by design. Lead with
+    advisory (authority, operating model, governance readiness), then
+    implement Copilot / Power Platform / M365 workflows under that model —
+    not tool sprawl, not unowned AI, not large multi-year SI theatre.
+  geography: >
+    Canada-oriented public and private buyers are in scope when the work is
+    operating-model, process, Microsoft-native AI enablement, or human-governed
+    automation. Prefer mid-market / SMB-right-sized scopes; large SI-only
+    footprints are a poor fit.
+  posture: >
+    One Authority · Human Governed · Traceable by Design. Authority before
+    automation. AI assistance without authority. Implementation over slideware.
+    Not a pure product vendor, not a classic MSP/service desk outsourcer,
+    not ServiceNow platform SI, not construction/facilities/commodities.
+
+# Priority: critical | high | medium | low (soft ranking hints for Grok).
+objectives:
+  - id: operating_authority
+    label: "Operating model / authority / governance design"
+    priority: critical
+    description: >
+      Help leaders define one source of authority for operations: decision
+      rights, canonical source of truth, operating contracts, registries,
+      runbooks, and governance readiness. Discovery and authority assessment
+      engagements. AtlasFlow OS thinking delivered through advisory.
+
+  - id: microsoft_cloud
+    label: "Microsoft-native enablement (M365 / Copilot / Power Platform)"
+    priority: critical
+    description: >
+      Practical Microsoft-native AI and workflow enablement on the stack SMBs
+      already own: Microsoft 365, Copilot, Power Platform (Power Apps / Power
+      Automate), SharePoint/Teams patterns, with security and governance that
+      fit real organisations — wired into operating contracts, not pilot demos.
+
+  - id: advisory_consulting
+    label: "Advisory retainer & operations counsel"
+    priority: high
+    description: >
+      Ongoing specialized advisory for operations/IT leaders and owners
+      (roughly 50–500 employees) who need a partner without hiring a large SI.
+      Operations and authority assessment, prioritisation of high-leverage
+      improvements, decision support without generic strategy decks.
+
+  - id: automation_process
+    label: "Governed workflow automation & agents"
+    priority: high
+    description: >
+      Workflow design and automation/agents only where authority is already
+      defined. Continuous flow Capture → Review → Curate → Use → Govern → Scale.
+      Execution under human authority — never above it. Power Automate and
+      adjacent automation under an operating contract.
+
+  - id: ai_operations
+    label: "Human-governed AI / AI governance / responsible enablement"
+    priority: high
+    description: >
+      AI adoption and enablement with human governance: AI assists; people
+      remain accountable. Strong fit for AI governance, responsible AI,
+      Copilot adoption with decision rights, and anti-patterns of unowned AI.
+      Weak fit for pure GenAI product platforms, AI that replaces ownership,
+      or hype-driven transformation without governance.
+
+  - id: knowledge_flow
+    label: "Traceable operating flow & continuous improvement"
+    priority: medium
+    description: >
+      Design work so it is reviewable, auditable, and improvable; shared
+      intelligence, knowledge that is curated and reused, operational
+      excellence loops — always attached to authority/governance design.
+
+# Soft filters for the interpreter (not hard ingest rules).
+guidance:
+  prefer:
+    - "Operating model, authority, governance, runbooks, decision rights"
+    - "Microsoft 365 / Copilot / Power Platform enablement with process ownership"
+    - "Human-governed AI, AI governance, responsible AI adoption"
+    - "Workflow automation under clear operating contracts"
+    - "Advisory / professional services scopes (not pure product resale)"
+    - "SMB-right-sized or modular public-sector work (not multi-year mega-SI only)"
+    - "Services categories (*SRV) with real ops/IT/process scope"
+  deprioritize:
+    - "Construction, facilities, elevator, snow/ice, food/beverage design, pure advertising creative"
+    - "Classic MSP / service desk / desktop outsourcing as the core SOW (not our offer)"
+    - "ServiceNow / ITSM platform implementation as primary scope (not on our site)"
+    - "Specialized product platforms (e.g. third-party risk intelligence SaaS) unless we partner"
+    - "Military payroll / niche HRIS sustainment without ops-model angle"
+    - "Keyword false positives with no operating-model or Microsoft-native scope"
+    - "Buyers who want AI to replace human ownership"
+    - "Hype AI transformation without governance"
+  output_tone: >
+    Plain language for an Atlas Flow Group capture lead. Lead with whether the
+    buyer needs authority/governance design and/or Microsoft-native enablement
+    under human control. Be candid: high keyword scores do not equal fit when
+    the SOW is product resale, construction, or classic outsourcing.
+  ranking_order_hint: >
+    Score highest when operating-model/advisory + Microsoft-native or
+    human-governed AI clearly align. Medium when only one pillar fits.
+    Low/pass for out-of-scope domains even if a single keyword matched.

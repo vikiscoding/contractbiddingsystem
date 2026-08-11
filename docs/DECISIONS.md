@@ -22,13 +22,28 @@ Condensed ADRs for Phase 1. See also design-doc Key Decisions (rev 4).
 | D-16 | `sync-sheets` optional extra (`[sheets]`) | Keep core install light |
 | D-17 | EN preferred, FR fallback on bilingual CSV | Maximize non-empty Title/Description/Link |
 | D-18 | Closing naive times as fixed UTC−05:00 | Deterministic vs DST-dependent ZoneInfo |
+| D-19 | Grok ranking is **post-ingest only** (optional) | Ingest stays explainable rule-based; AI never blocks create path |
+| D-20 | Grok never UPDATEs SQLite Status/Notes/RelevanceScore | Protects human triage; AI is a report, not SoR |
+| D-21 | Company objectives in `config/objectives.yaml` (eng-owned) | Same review model as keywords; frame for fit_score |
+| D-22 | Optional `[ai]` extra + `XAI_API_KEY` (xAI / Grok) | Keep core install light; OpenAI-compatible `https://api.x.ai/v1` |
+| D-23 | Google Sheets **Ranked** tab separate from **Ingest** | Full-replace both; refuse writing rankings into Ingest |
+| D-24 | Auto Ranked sync when `GOOGLE_SHEET_ID` set (`--no-sync-sheets` opt-out) | Live sheet path without extra flags; explicit skip for offline |
+| D-25 | `sync-rank-sheets` re-push from local JSON | Avoid re-calling Grok to refresh the sheet |
 
 ---
 
 ## Explicit non-decisions (deferred)
 
-- Multi-source adapters (MERX, municipal)  
-- Learning-to-rank / AI scoring from Status feedback  
+Tracked in detail: [`BACKLOG.md`](BACKLOG.md).
+
+- Multi-source adapters (MERX, municipal) as first-class ingest  
+- Learning-to-rank / AI scoring from Status feedback into store  
 - Two-way Sheets ↔ SQLite Status sync  
 - Automatic amendment/closing-date refresh  
 - Dual-write SQLite + SharePoint  
+- Website/source-type classifier + keyword packs by portal (B-01, B-02)  
+- Grok auto-suggest keywords into production YAML without human PR (forbidden; B-03 is suggest-only if built)  
+- Company-website crawl for capability vocabulary (B-04)  
+- Notice `Link` HTML crawl enrichment (B-05)  
+- Auto-bidding / proposal generation  
+- Historical backfill campaigns  

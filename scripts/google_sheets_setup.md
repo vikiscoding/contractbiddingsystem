@@ -96,7 +96,8 @@ You will share the Sheet with this address.
 1. Open [Google Sheets](https://sheets.google.com) → **Blank** spreadsheet.
 2. Rename the file, e.g. **Contract Opportunities**.
 3. Rename the first tab to **`Ingest`** (or leave default and set `GOOGLE_SHEET_TAB` later).
-4. Optional: add a second tab **`Review`** for human notes (job will not touch it if you only sync `Ingest`).
+4. Optional: add a **`Ranked`** tab for Grok interpret-rank output (created automatically on first rank sync if missing). Do **not** put rankings on `Ingest`.
+5. Optional: add a **`Review`** tab for human notes (pipeline will not touch it if you only sync `Ingest` / `Ranked`).
 
 ### B2. Share the sheet with the service account
 
@@ -139,7 +140,9 @@ DATA_DIR=data
 
 GOOGLE_SHEET_ID=1abc...your_id...xyz
 GOOGLE_SHEET_TAB=Ingest
+GOOGLE_SHEET_RANK_TAB=Ranked
 GOOGLE_SERVICE_ACCOUNT_FILE=secrets/google-service-account.json
+# Optional Grok (separate extra): XAI_API_KEY=...
 ```
 
 **Do not** commit `.env` or the JSON key.
@@ -165,7 +168,7 @@ Or override flags:
 python -m opportunity_ingest sync-sheets --sheet-id "1abc..." --tab Ingest
 ```
 
-Expected success line:
+Expected success line (Ingest):
 
 ```text
 Synced 10 rows to sheet 1abc... tab 'Ingest'
@@ -173,6 +176,24 @@ Synced 10 rows to sheet 1abc... tab 'Ingest'
 
 Open the Google Sheet in the browser → **Ingest** tab should show headers + rows  
 (Title, OpportunityID, Link, RelevanceScore, Status, …).
+
+### D2. Grok Ranked tab (optional)
+
+Same spreadsheet and service account. Rankings never write to **Ingest**.
+
+```powershell
+pip install -e ".[ai]"
+# XAI_API_KEY in root .env
+python -m opportunity_ingest interpret-rank --status New --limit 20
+# or re-push last local report without calling Grok:
+python -m opportunity_ingest sync-rank-sheets
+```
+
+- Creates/replaces tab **`Ranked`** (or `GOOGLE_SHEET_RANK_TAB`).  
+- Local copies: `data/rankings/interpret-*.md`.  
+- Skip sheet push: `--no-sync-sheets`.  
+- Full human checklist (all features): [`docs/PLUG_AND_PLAY.md`](../docs/PLUG_AND_PLAY.md).
+- Architecture: [`docs/AS_BUILT.md`](../docs/AS_BUILT.md). Unbuilt ideas: [`docs/BACKLOG.md`](../docs/BACKLOG.md).
 
 ---
 

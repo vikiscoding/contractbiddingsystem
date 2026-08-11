@@ -8,6 +8,7 @@ Phase 1 pipeline: download CanadaBuys **Open Tender Notices** CSV, filter by key
 | **Optional store** | SharePoint via Microsoft Graph (`STORAGE_BACKEND=sharepoint`) |
 | **Optional view** | Google Sheets tab full-replace (`sync-sheets`) |
 | **LLM / agent entry** | **[`AGENTS.md`](AGENTS.md)** ← start here for AI-assisted development |
+| **Human plug-in** | **[`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md)** ← keys, steps, roadmap to go live |
 
 ---
 
@@ -15,10 +16,12 @@ Phase 1 pipeline: download CanadaBuys **Open Tender Notices** CSV, filter by key
 
 | Doc | Audience | Purpose |
 |-----|----------|---------|
+| [`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md) | **Operators / humans** | **Keys to plug, function list, go-live sequence, roadmap** |
 | [`AGENTS.md`](AGENTS.md) | LLMs + devs | Hard rules, module map, task routing |
 | [`docs/STATUS.md`](docs/STATUS.md) | Everyone | Living readiness / what works now |
 | [`docs/INDEX.md`](docs/INDEX.md) | Everyone | Full doc index |
 | [`docs/AS_BUILT.md`](docs/AS_BUILT.md) | Devs / LLMs | Implemented architecture |
+| [`docs/BACKLOG.md`](docs/BACKLOG.md) | Everyone | Roadmap / not built yet |
 | [`docs/DATA_UPDATE_DIRECTIVES.md`](docs/DATA_UPDATE_DIRECTIVES.md) | Devs / LLMs | **MUST / MUST NOT** for data writes & sync |
 | [`docs/CHANGE_PLAYBOOK.md`](docs/CHANGE_PLAYBOOK.md) | Devs / LLMs | How to make common changes |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Devs / LLMs | Key ADRs |
@@ -41,6 +44,9 @@ If design doc and as-built conflict → **prefer code + AS_BUILT + DATA_UPDATE_D
 ---
 
 ## Quick start (Windows)
+
+**Full human checklist (keys, Sheets, Grok, Teams, roadmap):**  
+→ **[`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md)**
 
 ```powershell
 cd "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
@@ -71,6 +77,22 @@ pip install -e ".[sheets]"
 python -m opportunity_ingest sync-sheets
 ```
 
+### Grok interpret-rank (optional AI brief)
+
+Plain-English rewrite + rank against `config/objectives.yaml` (does **not** change SQLite rows).  
+When `GOOGLE_SHEET_ID` is set (your live sheet), rankings are **full-replaced** into a **`Ranked`** tab (separate from `Ingest`):
+
+```powershell
+pip install -e ".[ai]"
+pip install -e ".[sheets]"   # same service account as sync-sheets
+# Set XAI_API_KEY + existing GOOGLE_* in root .env
+python -m opportunity_ingest interpret-rank --status New --limit 20
+# Local: data/rankings/interpret-*.md
+# Sheet: tab Ranked (created if missing)
+# Skip sheet push: --no-sync-sheets
+# Re-push last report without Grok: python -m opportunity_ingest sync-rank-sheets
+```
+
 **Notes learned in setup:**
 
 - `pip install -e .` needs the trailing `.`
@@ -88,14 +110,18 @@ python -m opportunity_ingest download-sample [--out PATH]
 python -m opportunity_ingest check-store
 python -m opportunity_ingest export-csv [--out PATH]
 python -m opportunity_ingest sync-sheets [--sheet-id ID] [--tab NAME]
+python -m opportunity_ingest interpret-rank [--status STATUS] [--limit N] [--sync-sheets|--no-sync-sheets]
+python -m opportunity_ingest sync-rank-sheets [--from-json PATH] [--rank-tab NAME]
 ```
 
 | Command | Persist store? | Notes |
 |---------|----------------|--------|
 | `run` | Only with `--write` | Default dry-run |
 | `export-csv` | No | Snapshot for Excel |
-| `sync-sheets` | No SQLite write | **Full-replace** Sheet tab |
+| `sync-sheets` | No SQLite write | **Full-replace** Sheet tab `Ingest` |
 | `check-store` | No | Health + key count |
+| `interpret-rank` | No | Grok rewrite + rank → `data/rankings/` + optional Sheets **Ranked** |
+| `sync-rank-sheets` | No | Re-push ranking JSON → Sheets **Ranked** (no Grok call) |
 
 ---
 
@@ -107,14 +133,21 @@ python -m opportunity_ingest sync-sheets [--sheet-id ID] [--tab NAME]
 | `DATA_DIR` | `data` | DB + exports |
 | `MAX_CREATE` | `50` | Create-**attempt** budget; `0`=unlimited |
 | `GOOGLE_SHEET_ID` | — | Sheets sync |
-| `GOOGLE_SHEET_TAB` | `Ingest` | Tab overwritten on sync |
+| `GOOGLE_SHEET_TAB` | `Ingest` | Opportunity tab overwritten on sync |
+| `GOOGLE_SHEET_RANK_TAB` | `Ranked` | Grok ranking tab overwritten on interpret-rank |
 | `GOOGLE_SERVICE_ACCOUNT_FILE` | — | Path to JSON key |
-| `TEAMS_WEBHOOK_URL` | — | Failure / streak alerts |
+| `TEAMS_WEBHOOK_URL` | — | Ops alerts + match fallback |
+| `TEAMS_MATCH_WEBHOOK_URL` | — | Optional capture-channel webhook |
+| `TEAMS_MATCH_SCORE_THRESHOLD` | `40` | Ping when score ≥ N |
+| `XAI_API_KEY` | — | Grok interpret-rank |
+| `OBJECTIVES_PATH` | `config/objectives.yaml` | AI ranking frame of reference |
 
-Full list: `.env.example`, `config/settings.example.env`, `docs/AS_BUILT.md`.
+Full list: `.env.example`, `config/settings.example.env`, [`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md), `docs/AS_BUILT.md`.
 
 **Data rules (critical):** create-only; never silent-truncate Link; Sheets is a view.  
 → [`docs/DATA_UPDATE_DIRECTIVES.md`](docs/DATA_UPDATE_DIRECTIVES.md)
+
+**What exists vs not built:** [`docs/STATUS.md`](docs/STATUS.md) · [`docs/AS_BUILT.md`](docs/AS_BUILT.md) · [`docs/BACKLOG.md`](docs/BACKLOG.md)
 
 ---
 

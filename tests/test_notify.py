@@ -9,10 +9,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from opportunity_ingest.notify import (
+    MatchAlertItem,
     NotifyError,
     build_adaptive_card_payload,
     build_ingest_alert_payload,
+    build_match_alert_payload,
+    filter_match_items,
+    match_items_from_ranked,
     notify_ingest_alert,
+    notify_match_alerts,
     post_teams_webhook,
     set_github_output_notified,
 )
@@ -163,3 +168,97 @@ def test_notify_returns_false_when_github_output_handoff_fails(
         )
     assert post.called
     assert ok is False
+
+
+def _sample_match(score: int = 55, oid: str = "ID-1") -> MatchAlertItem:
+    return MatchAlertItem(
+        title="Cloud RFP for Copilot enablement",
+        opportunity_id=oid,
+        link=f"https://example.com/notice/{oid}",
+        score=score,
+        score_kind="RelevanceScore",
+        buyer="PSPC",
+        keywords="copilot, power platform",
+        summary="Buyer wants Microsoft-native AI under human governance.",
+        recommendation="pursue",
+        closing_date="2026-09-01T00:00:00Z",
+    )
+
+
+def test_filter_match_items_threshold():
+    items = [_sample_match(55), _sample_match(30, "LOW"), _sample_match(90, "HI")]
+    out = filter_match_items(items, threshold=40)
+    assert [i.opportunity_id for i in out] == ["HI", "ID-1"]
+
+
+def test_build_match_alert_payload_has_cta_and_truncation():
+    items = [_sample_match(52, "WS-AI"), _sample_match(41, "WS-IAM")]
+    payload = build_match_alert_payload(items, threshold=40, source="ingest")
+    card = payload["attachments"][0]["content"]
+    assert card["type"] == "AdaptiveCard"
+    assert "actions" in card
+    assert card["actions"][0]["type"] == "Action.OpenUrl"
+    assert "https://example.com/notice/WS-AI" in card["actions"][0]["url"]
+    body_text = " ".join(
+        str(b.get("text", "")) for b in card["body"] if isinstance(b, dict)
+    )
+    assert "52/100" in body_text or "52" in body_text
+
+
+def test_notify_match_alerts_success():
+    with patch("opportunity_ingest.notify.post_teams_webhook") as post:
+        ok = notify_match_alerts(
+            "https://example.com/hook",
+            [_sample_match(60)],
+            threshold=40,
+            source="ingest",
+        )
+    assert ok is True
+    post.assert_called_once()
+
+
+def test_notify_match_alerts_below_threshold_skips():
+    with patch("opportunity_ingest.notify.post_teams_webhook") as post:
+        ok = notify_match_alerts(
+            "https://example.com/hook",
+            [_sample_match(10)],
+            threshold=40,
+        )
+    assert ok is False
+    post.assert_not_called()
+
+
+def test_notify_match_alerts_disabled():
+    with patch("opportunity_ingest.notify.post_teams_webhook") as post:
+        ok = notify_match_alerts(
+            "https://example.com/hook",
+            [_sample_match(90)],
+            enabled=False,
+        )
+    assert ok is False
+    post.assert_not_called()
+
+
+def test_match_items_from_ranked_dicts():
+    ranked = [
+        {
+            "fit_score": 52,
+            "title": "AI ITQ",
+            "opportunity_id": "X",
+            "link": "https://example.com/x",
+            "plain_english": "Source list for AI",
+            "recommendation": "watch",
+            "buyer": "PSPC",
+            "keywords_matched": "artificial intelligence",
+        },
+        {
+            "fit_score": 5,
+            "title": "Elevator",
+            "opportunity_id": "Y",
+            "link": "https://example.com/y",
+        },
+    ]
+    items = match_items_from_ranked(ranked, threshold=40)
+    assert len(items) == 1
+    assert items[0].score == 52
+    assert items[0].score_kind == "GrokFit"

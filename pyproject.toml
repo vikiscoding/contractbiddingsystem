@@ -29,6 +29,9 @@ sheets = [
     "gspread>=6.0",
     "google-auth>=2.0",
 ]
+ai = [
+    "openai>=1.40",
+]
 
 [project.scripts]
 opportunity-ingest = "opportunity_ingest.cli:main"

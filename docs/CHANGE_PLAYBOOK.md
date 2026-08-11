@@ -54,6 +54,21 @@ How to implement common changes safely. Follow [`DATA_UPDATE_DIRECTIVES.md`](DAT
 
 ---
 
+## E2. Tune Grok interpret-rank / company objectives
+
+1. Edit `config/objectives.yaml` (eng-owned; align with keyword groups when possible).  
+2. Prompt / schema / merge logic: `interpret_rank.py` + `tests/test_interpret_rank.py`.  
+3. **Never** write fit scores into SQLite opportunity rows.  
+4. Local run: `pip install -e ".[ai]"`, set `XAI_API_KEY`, then  
+   `python -m opportunity_ingest interpret-rank --status New --limit 20`.  
+5. Review `data/rankings/interpret-*.md` and Sheets **Ranked** tab; adjust objectives, not Status automation.  
+6. Re-push without Grok: `python -m opportunity_ingest sync-rank-sheets`.  
+7. Skip sheet: `--no-sync-sheets`.  
+
+**Not yet implemented** (do not invent code paths): website-type keyword packs, `suggest-keywords` CLI — track in [`BACKLOG.md`](BACKLOG.md) B-01–B-03.
+
+---
+
 ## F. Google Sheets behavior change
 
 1. Default remains **full replace** of one tab unless product explicitly requests upsert.  

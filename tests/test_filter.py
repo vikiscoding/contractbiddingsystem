@@ -91,17 +91,20 @@ def test_load_shipped_keywords_yaml():
     group_ids = {t.group for t in cfg.terms}
     assert group_ids == {
         "microsoft_cloud",
-        "managed_services",
-        "itsm_servicenow",
+        "operating_authority",
         "advisory_consulting",
         "automation_process",
         "ai_operations",
+        "knowledge_flow",
     }
-    # No bare noisy terms in shipped defaults
+    # No bare noisy terms in shipped defaults (Atlas-tuned)
     bare = {t.term.lower() for t in cfg.terms}
     assert "teams" not in bare
     assert "strategy" not in bare
+    assert "service desk" not in bare  # classic MSP noise; not Atlas offer
     assert "microsoft teams" in bare
+    assert "operating model" in bare
+    assert "copilot" in bare
 
 
 @pytest.mark.parametrize(
@@ -285,13 +288,15 @@ def test_suppress_nested_terms_helper():
     ]
 
 
-def test_shipped_config_managed_services_not_double_counted():
+def test_shipped_config_nested_operating_terms_not_double_counted():
+    """Longer phrase wins when nested shorter is fully covered by span rules."""
     cfg = load_keyword_config(KEYWORDS_PATH)
-    hit = _tender(title="managed services for IT")
+    hit = _tender(title="operating contracts and registries for governance")
     result = match_keywords(hit, cfg)
-    assert "managed services" in result.terms
-    assert "managed service" not in result.terms
-    assert result.weights["managed services"] == 16
+    assert "operating contracts" in result.terms
+    # singular nested form should not also count when only plural phrase hit
+    assert result.matched is True
+    assert "operating_authority" in result.groups
 
 
 def test_filter_tenders_drops_non_matches():

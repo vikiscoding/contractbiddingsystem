@@ -4,8 +4,9 @@ Operator guide for day-1 SQLite storage, Status triage, calibration, create caps
 
 **Audience:** operators who review opportunities and manage the daily schedule.  
 **Engineering owns:** `config/keywords.yaml`, pipeline code, GitHub workflow YAML.  
+**First-time plug-in (keys, Grok, Teams, function list, roadmap):** **[PLUG_AND_PLAY.md](../docs/PLUG_AND_PLAY.md)**.  
 **LLM / data rules:** [AGENTS.md](../AGENTS.md), [DATA_UPDATE_DIRECTIVES](../docs/DATA_UPDATE_DIRECTIVES.md), [AS_BUILT](../docs/AS_BUILT.md).  
-**Related:** [README.md](../README.md), [google_sheets_setup.md](google_sheets_setup.md), [provision_sharepoint_list.md](provision_sharepoint_list.md), [daily_sync.ps1](daily_sync.ps1).
+**Related:** [README.md](../README.md), [google_sheets_setup.md](google_sheets_setup.md), [provision_sharepoint_list.md](provision_sharepoint_list.md), [daily_sync.ps1](daily_sync.ps1), [BACKLOG.md](../docs/BACKLOG.md).
 
 ---
 
@@ -14,11 +15,17 @@ Operator guide for day-1 SQLite storage, Status triage, calibration, create caps
 ```text
 1. run --write          → SQLite system of record (create-only)
 2. sync-sheets          → optional full-replace of Google tab "Ingest"
-3. export-csv           → optional Excel snapshot
-4. Human Status triage  → SQLite / export / Sheet Review tab (not Ingest if auto-synced)
+3. interpret-rank       → optional Grok plain-English + fit rank
+                          (writes data/rankings/*; full-replaces Sheet tab "Ranked"
+                           when GOOGLE_SHEET_ID set — use --no-sync-sheets to skip)
+4. export-csv           → optional Excel snapshot
+5. Human Status triage  → SQLite / export / Sheet Review tab (not Ingest if auto-synced)
+                          Use Ranked tab for capture prioritization; do not treat fit_score
+                          as store RelevanceScore
 ```
 
-Windows automation sample: [`daily_sync.ps1`](daily_sync.ps1) (Task Scheduler).
+Windows automation sample: [`daily_sync.ps1`](daily_sync.ps1) (Task Scheduler).  
+**Not built yet:** website-type keyword packs, auto keyword suggestions — see [`docs/BACKLOG.md`](../docs/BACKLOG.md).
 
 ---
 
@@ -57,7 +64,25 @@ pip install -e ".[sheets]"
 python -m opportunity_ingest sync-sheets
 ```
 
-- Setup: [google_sheets_setup.md](google_sheets_setup.md)
+- Setup: [google_sheets_setup.md](google_sheets_setup.md)  
+- Tab **`Ingest`**: opportunity rows from SQLite (full replace).  
+- Tab **`Ranked`**: Grok ranking (full replace via `interpret-rank` / `sync-rank-sheets`).  
+- Tab **`Review`**: human-only if you create it — pipeline does not write it.
+
+### Grok interpret-rank (optional)
+
+Requires `pip install -e ".[ai]"`, root `.env` `XAI_API_KEY`, and eng-owned `config/objectives.yaml`.
+
+```bash
+python -m opportunity_ingest interpret-rank --status New --limit 20
+# Offline reports only:
+python -m opportunity_ingest interpret-rank --limit 20 --no-sync-sheets
+# Re-push last ranking JSON to Ranked tab (no Grok call):
+python -m opportunity_ingest sync-rank-sheets
+```
+
+- Local files: `data/rankings/interpret-*.md` (and `.json`).  
+- **Does not** change SQLite Status, Notes, or RelevanceScore.
 - **Ingest** tab is **full-replaced** every sync — put manual notes on a separate **Review** tab
 - SQLite remains system of record; Sheets is a derived view
 - Normative rules: [DATA_UPDATE_DIRECTIVES.md](../docs/DATA_UPDATE_DIRECTIVES.md) §3
@@ -406,21 +431,33 @@ python -m opportunity_ingest run [--write | --dry-run] [--csv PATH] [--max-creat
 python -m opportunity_ingest download-sample [--out PATH]
 python -m opportunity_ingest check-store
 python -m opportunity_ingest export-csv [--out PATH]
+python -m opportunity_ingest sync-sheets [--sheet-id ID] [--tab NAME]
+python -m opportunity_ingest interpret-rank [--status S] [--limit N] [--sync-sheets|--no-sync-sheets]
+python -m opportunity_ingest sync-rank-sheets [--from-json PATH] [--rank-tab NAME]
 ```
 
-Only **`--write`** persists. Default (and `--dry-run`) never writes. `DRY_RUN` env never enables write alone.
+Only **`--write`** on `run` persists opportunities. Default (and `--dry-run`) never writes store rows. `DRY_RUN` env never enables write alone.  
+`interpret-rank` / sheet commands never UPDATE opportunity rows.
 
 ## Quick reference — key env / vars
 
 | Name | Default | Notes |
 |------|---------|--------|
 | `STORAGE_BACKEND` | `sqlite` | `sharepoint` when activated |
-| `DATA_DIR` | `data` | SQLite + exports |
+| `DATA_DIR` | `data` | SQLite + exports + rankings |
 | `MAX_CREATE` / `INGEST_MAX_CREATE` | `50` | Attempt budget; `0` = unlimited |
 | `ZERO_NEW_STREAK_THRESHOLD` | `3` | Teams after N zero-new UTC days |
 | `PARTIAL_ERROR_EXIT_THRESHOLD` | `5` | Exit 1 + notify |
-| `TEAMS_WEBHOOK_URL` | — | Strongly recommended day-1 |
-| `KEYWORDS_PATH` | `config/keywords.yaml` | Eng-owned |
+| `TEAMS_WEBHOOK_URL` | — | Ops alerts (fail/streak); also match fallback |
+| `TEAMS_MATCH_WEBHOOK_URL` | — | Optional dedicated capture channel |
+| `TEAMS_MATCH_SCORE_THRESHOLD` | `40` | Ping when RelevanceScore or Grok fit ≥ N |
+| `TEAMS_MATCH_NOTIFY_ENABLED` | `true` | Master switch for match pings |
+| `KEYWORDS_PATH` | `config/keywords.yaml` | Eng-owned ingest filter |
+| `OBJECTIVES_PATH` | `config/objectives.yaml` | Eng-owned Grok frame |
+| `XAI_API_KEY` | — | Required for interpret-rank |
+| `GOOGLE_SHEET_ID` | — | Ingest + Ranked sheet |
+| `GOOGLE_SHEET_TAB` | `Ingest` | Opportunity full-replace |
+| `GOOGLE_SHEET_RANK_TAB` | `Ranked` | Grok full-replace |
 | `STATE_PATH` | `state/zero_new_streak.json` | Streak JSON |
 
 ---

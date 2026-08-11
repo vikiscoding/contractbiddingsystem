@@ -10,7 +10,9 @@ Central map for humans and LLMs. **Start at [`../AGENTS.md`](../AGENTS.md).**
 |-----|-------------|
 | [`../AGENTS.md`](../AGENTS.md) | Entry point: hard rules, module map, task routing |
 | [`STATUS.md`](STATUS.md) | Living implementation / ops readiness snapshot |
+| [`PLUG_AND_PLAY.md`](PLUG_AND_PLAY.md) | **Human keys + next steps** to turn on built features |
 | [`AS_BUILT.md`](AS_BUILT.md) | Implemented architecture (source of truth for “what exists now”) |
+| [`BACKLOG.md`](BACKLOG.md) | Roadmap / **discussed but not built** |
 | [`DATA_UPDATE_DIRECTIVES.md`](DATA_UPDATE_DIRECTIVES.md) | Normative data write/sync rules (MUST / MUST NOT) |
 | [`CHANGE_PLAYBOOK.md`](CHANGE_PLAYBOOK.md) | Step recipes for common development changes |
 | [`DECISIONS.md`](DECISIONS.md) | Key architectural decisions (ADR-style, as-built) |
@@ -41,7 +43,9 @@ Central map for humans and LLMs. **Start at [`../AGENTS.md`](../AGENTS.md).**
 |------|-------------|
 | [`../.env.example`](../.env.example) | Root env template |
 | [`../config/settings.example.env`](../config/settings.example.env) | Settings mirror |
-| [`../config/keywords.yaml`](../config/keywords.yaml) | Keyword groups (eng-owned) |
+| [`../config/keywords.yaml`](../config/keywords.yaml) | Keyword groups for ingest filter (eng-owned) |
+| [`../config/objectives.yaml`](../config/objectives.yaml) | Company objectives for Grok interpret-rank (eng-owned) |
+| [`../config/notify.yaml`](../config/notify.yaml) | Teams match threshold / card limits |
 
 ---
 
@@ -50,3 +54,4 @@ Central map for humans and LLMs. **Start at [`../AGENTS.md`](../AGENTS.md).**
 | Doc | Description |
 |-----|-------------|
 | [`../README.md`](../README.md) | Quick start, CLI, secrets table, links |
+| [`PLUG_AND_PLAY.md`](PLUG_AND_PLAY.md) | Operator plug-in checklist (keys → working stack) |
