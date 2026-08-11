@@ -172,9 +172,12 @@ def test_factory_sqlite_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     built.health_check()
 
 
-def test_factory_sharepoint_not_implemented(monkeypatch: pytest.MonkeyPatch):
+def test_factory_sharepoint_requires_secrets(monkeypatch: pytest.MonkeyPatch):
+    """SharePoint backend is implemented; missing Azure/site secrets → StoreError."""
+    from opportunity_ingest.storage import StoreError
+
     settings = Settings(_env_file=None, storage_backend="sharepoint")
-    with pytest.raises(NotImplementedError, match="SharePoint"):
+    with pytest.raises(StoreError, match="SharePoint backend requires"):
         build_store(settings)
 
 

@@ -1,7 +1,7 @@
 """Runtime settings from environment (pydantic-settings).
 
 ``STORAGE_BACKEND`` selects the OpportunityStore implementation (default: sqlite).
-SharePoint backend is wired in a later PR; factory raises until then.
+SharePoint requires Azure + site/list secrets when ``STORAGE_BACKEND=sharepoint``.
 """
 
 from __future__ import annotations

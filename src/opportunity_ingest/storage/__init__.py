@@ -1,4 +1,4 @@
-"""Pluggable opportunity storage backends (SQLite default; SharePoint later)."""
+"""Pluggable opportunity storage backends (SQLite default; SharePoint optional)."""
 
 from opportunity_ingest.storage.base import (
     AttemptBudget,
@@ -11,11 +11,13 @@ from opportunity_ingest.storage.base import (
     register_created,
 )
 from opportunity_ingest.storage.factory import build_store
+from opportunity_ingest.storage.sharepoint_store import SharePointOpportunityStore
 from opportunity_ingest.storage.sqlite_store import SqliteOpportunityStore
 
 __all__ = [
     "AttemptBudget",
     "OpportunityStore",
+    "SharePointOpportunityStore",
     "SkipDuplicate",
     "SqliteOpportunityStore",
     "StoreError",
