@@ -28,12 +28,13 @@ cp .env.example .env
 
 ```bash
 pip install -e .
-python -m opportunity_ingest run --csv path/or/download-sample
+python -m opportunity_ingest download-sample
+python -m opportunity_ingest run --csv data/sample-openTenderNotice.csv
 python -m opportunity_ingest run --write --max-create 10
 python -m opportunity_ingest export-csv
 ```
 
-For live dry-run without a local CSV, use `python -m opportunity_ingest run` (downloads the open-tender feed). Prefer `download-sample` or a fixture path for offline smoke tests.
+Live dry-run (downloads the open-tender feed, no local CSV): `python -m opportunity_ingest run`. Fixture alternative: `--csv tests/fixtures/open_tender_sample.csv`.
 
 **Operators:** full Status triage, `MAX_CREATE` policy, calibration, amendment caveat, keyword ownership, Teams/streak alerts, cache re-runs, SharePoint flip, and rollback → **[scripts/ops_runbook.md](scripts/ops_runbook.md)**.
 

@@ -80,7 +80,16 @@ Prefer updating by `OpportunityID` (unique). Avoid bulk Status changes unless yo
 
 ### CI / Actions artifact note
 
-On scheduled runs, the SQLite file lives under the Actions cache/artifact for `data/`. To triage remotely: download the latest `data/` artifact from the workflow run, open the DB or run `export-csv` locally against that file (`SQLITE_PATH=...`).
+Scheduled runs use [`.github/workflows/daily-canadabuys-ingest.yml`](../.github/workflows/daily-canadabuys-ingest.yml) (**Daily CanadaBuys Opportunity Ingest**). Each run uploads a recovery artifact (`data/*.db`, `state/`, `logs/`); cache of `data/` + `state/` is best-effort continuity only.
+
+To triage remotely: download the latest run artifact, then open the DB or run:
+
+```bash
+# Point at the downloaded DB
+set SQLITE_PATH=path/to/downloaded/contract_opportunities.db   # Windows cmd
+# export SQLITE_PATH=...   # Unix
+python -m opportunity_ingest export-csv --out data/export-from-artifact.csv
+```
 
 ---
 
@@ -105,41 +114,68 @@ Before relying on the daily schedule at full volume, calibrate against live data
 ### Step A — Dry-run (no writes)
 
 ```bash
-# Live download (default dry-run)
+# Live download (default dry-run — no store reads, no writes)
 python -m opportunity_ingest run
 
-# Or offline CSV
-python -m opportunity_ingest run --csv path/to/openTenderNotice.csv
-# / download-sample first:
+# Offline sample (two-step)
 python -m opportunity_ingest download-sample
-python -m opportunity_ingest run --csv data/sample-open-tender.csv
+# Default path: data/sample-openTenderNotice.csv
+python -m opportunity_ingest run --csv data/sample-openTenderNotice.csv
+
+# Or any local open-tender CSV / fixture
+python -m opportunity_ingest run --csv tests/fixtures/open_tender_sample.csv
 ```
 
-Record from the CLI summary line:
+Record from the CLI summary line (printed after every `run`):
 
-- `parsed` — rows read
-- **`filtered`** — keyword hits (`filtered_count`) — primary volume signal
-- `would_create` — new vs existing (0 if no store keys loaded)
-- `skipped_dup` / `skipped_max`
+| Metric | Meaning |
+|--------|---------|
+| `parsed` | Rows read from the CSV |
+| **`filtered`** | Keyword hits (`filtered_count`) — **primary volume signal** for MAX_CREATE policy |
+| `mapped` | Successfully mapped candidates (map errors are separate) |
+| `would_create` | On **dry-run**: candidates that would be created under the attempt budget. Default dry-run does **not** load store keys, so every mapped candidate is treated as new (intra-run dups still skipped). **Not** zero just because the store was unused. |
+| `skipped_dup` | Duplicate OpportunityID/Link (intra-run, or vs loaded keys) |
+| `skipped_max` | Eligible new candidates left unattempted because the attempt budget was exhausted |
+| `added` | Actual creates — only increments on **`--write`** (stays 0 on dry-run) |
 
-Optional dry-run with existing keys (requires store):
+Dry-run **with existing store keys** (still no writes; store must be available):
 
 ```bash
+# Live feed + load keys from configured store
 python -m opportunity_ingest run --with-existing
+
+# Offline sample + load keys
+python -m opportunity_ingest run --csv data/sample-openTenderNotice.csv --with-existing
 ```
+
+With `--with-existing`, `would_create` / `skipped_dup` reflect dedupe against `load_existing_keys()` — use this to estimate true new volume vs a populated store. `--with-existing` is dry-run only (CLI rejects it with `--write`).
 
 ### Step B — Measure Link length risk
 
-Links must never be silent-truncated. On a live or sample CSV, measure max URL length (PowerShell example):
+Links are stored as full plain-text URLs and are **never silent-truncated**. Day-1 mapping does **not** hard-skip long Links (multi-line TEXT / multi-line SharePoint field); still measure `max(len(link))` so ops/eng know live URL size.
 
-```powershell
-# After download-sample or a live dry-run that wrote a CSV path you control
-python -c "import csv; from pathlib import Path; p=Path('data/sample-open-tender.csv');
-# Or use a fixture; inspect link columns after parse in a notebook
-print('Open fixture/sample and max(len(link)) from pipeline logs if emitted')"
+After `download-sample` (or any open-tender CSV):
+
+```bash
+python -c "import csv; from pathlib import Path; p=Path('data/sample-openTenderNotice.csv');
+rows=list(csv.DictReader(p.open(encoding='utf-8-sig', newline='')));
+lens=[]
+for row in rows:
+    link=(row.get('noticeURL-URLavis-eng') or row.get('noticeURL-URLavis-fra') or '').strip()
+    if link: lens.append(len(link))
+print(f'urls={len(lens)} max_len={max(lens) if lens else 0}')"
 ```
 
-Practical check: after a dry-run, inspect map/skip logs for Link policy skips. If `max(len(link))` approaches the hard skip threshold, open a GitHub issue for engineering (schema/limit), not an ops-only keyword tweak.
+Optional after a smoke write + export (stored Link column):
+
+```bash
+python -m opportunity_ingest export-csv --out data/export-opportunities.csv
+python -c "import csv; from pathlib import Path; p=Path('data/export-opportunities.csv');
+lens=[len((r.get('Link') or '').strip()) for r in csv.DictReader(p.open(encoding='utf-8-sig', newline='')) if (r.get('Link') or '').strip()];
+print(f'stored={len(lens)} max_len={max(lens) if lens else 0}')"
+```
+
+If max length is unexpectedly large or tooling breaks on long URLs, open a GitHub issue for engineering — not an ops-only keyword tweak.
 
 ### Step C — Smoke write with a tight cap
 
@@ -244,11 +280,15 @@ Primary notify is **Python** via `TEAMS_WEBHOOK_URL`. Actions may backup-notify 
 
 ## 7. Cache re-run behavior (`run_attempt`)
 
-Daily workflow persists `data/` (SQLite) and `state/` via GitHub Actions cache:
+Workflow: [`.github/workflows/daily-canadabuys-ingest.yml`](../.github/workflows/daily-canadabuys-ingest.yml).
 
-- Cache key includes **`github.run_id`** and **`github.run_attempt`**
-- Restore-keys allow fallback to prior successful caches
-- Cache **save** uses `continue-on-error` so a failed save on re-run does not fail the whole job
+Daily job restores/saves `data/` (SQLite) and `state/` via GitHub Actions cache:
+
+- Cache key prefix: `canadabuys-ingest-`
+- Key includes **`github.run_id`** and **`github.run_attempt`**
+- Restore-keys fall back to prior `canadabuys-ingest-${{ runner.os }}-` entries
+- Cache **save** is best-effort (`continue-on-error`) so a failed save on re-run does not fail the whole job
+- Per-run **artifact** (`data/*.db`, `state/`, `logs/`) is the recovery path if cache is missing or stale
 
 ### Why `run_attempt` matters
 
@@ -256,19 +296,19 @@ GitHub Actions cache keys are immutable once written. A job **re-run** gets a ne
 
 ### Operator notes
 
-- Prefer **workflow_dispatch** for intentional re-runs during incidents.
-- After a re-run, confirm the latest artifact/cache reflects new rows (export or `check-store`).
-- If cache restore yields an empty/old DB, restore from a recent successful run’s uploaded `data/` artifact (if configured) or known-good local backup — see Rollback.
+- Prefer **workflow_dispatch** (optional `max_create` / `dry_run` inputs) for intentional re-runs during incidents.
+- After a re-run, confirm the latest **artifact** reflects new rows (`export-csv` or `check-store` against the downloaded DB).
+- If cache restore yields an empty/old DB, restore from a recent successful run’s uploaded artifact or a known-good local backup — see Rollback.
 
 ---
 
 ## 8. SharePoint activation checklist
 
-Day-1 production path is **SQLite**. SharePoint is a pluggable backend (`STORAGE_BACKEND=sharepoint`); flip only when Entra/site/list are ready.
+Day-1 production path is **SQLite**. SharePoint is a pluggable `OpportunityStore` backend: set `STORAGE_BACKEND=sharepoint` and the Azure/SharePoint secrets below when Entra, site, and list are ready. Until then, leave `STORAGE_BACKEND=sqlite` (no Azure secrets required).
 
 ### Checklist
 
-1. Complete **[scripts/provision_sharepoint_list.md](provision_sharepoint_list.md)**:
+1. Complete **[scripts/provision_sharepoint_list.md](provision_sharepoint_list.md)** (list creation, site/list IDs, Entra app, `Sites.Selected` grant):
    - Create list **Contract Opportunities** (UI source of truth; multi-line plain-text Link — not Hyperlink column)
    - Resolve site/list IDs
    - Entra app + `Sites.Selected` + admin consent
@@ -283,18 +323,20 @@ Day-1 production path is **SQLite**. SharePoint is a pluggable backend (`STORAGE
    | `SHAREPOINT_SITE_ID` | Graph site id |
    | `SHAREPOINT_LIST_ID` | List GUID |
 
-3. Set `STORAGE_BACKEND=sharepoint` on the daily workflow (and local `.env` for smoke tests).
-4. Smoke:
+3. Set `STORAGE_BACKEND=sharepoint` on the daily workflow env (and local `.env` for smoke tests). Keep `INGEST_MAX_CREATE` / soft cap policy from §4.
+4. Smoke (with secrets present and backend flipped):
 
    ```bash
    python -m opportunity_ingest check-store
    python -m opportunity_ingest run --write --max-create 5
    ```
 
-5. Optional one-time migration: export SQLite CSV → manual import or scripted creates. **No dual-write** in Phase 1.
-6. Note: `export-csv` remains sqlite-oriented; use SharePoint list views for human Status triage after the flip.
+   `check-store` performs backend health + sample key load against Graph when `STORAGE_BACKEND=sharepoint`.
 
-Do **not** require SharePoint for day-1 go-live. Azure secrets are optional while `STORAGE_BACKEND=sqlite`.
+5. Optional one-time migration: export SQLite CSV → manual import or scripted creates. **No dual-write** in Phase 1 — switch backends; do not write both.
+6. Human Status triage after flip: use SharePoint list views. `export-csv` remains the sqlite review path.
+
+Do **not** require SharePoint for day-1 go-live.
 
 ---
 
@@ -322,7 +364,12 @@ If SharePoint activation misbehaves:
 
 ### Soft containment (no full disable)
 
-- Dispatch with `dry_run=true`, or set `INGEST_MAX_CREATE=0` only after policy criteria (or temporarily set a very low `max_create` via dispatch, e.g. `1` or `10`) to limit blast radius while debugging.
+Limit blast radius **without** disabling the workflow:
+
+- Dispatch with **`dry_run=true`** (no writes), **or**
+- Dispatch with a **low** `max_create` override (**10** or **25**), **or** temporarily lower repo variable `INGEST_MAX_CREATE` to **10** / **25**.
+
+**Never use `0` for containment.** `MAX_CREATE` / `INGEST_MAX_CREATE=0` means **unlimited** create attempts (see §4). Unlimited is only appropriate after the steady-state policy criteria, not during an incident.
 
 ---
 
