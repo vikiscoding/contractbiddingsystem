@@ -136,6 +136,14 @@ def test_attempt_budget_zero_is_unlimited():
     assert b.used == 100
 
 
+def test_attempt_budget_none_is_unlimited():
+    # Settings.max_create defaults to None (unset) → unlimited.
+    b = AttemptBudget(max_create=None)
+    assert b.unlimited
+    assert b.max_create == 0
+    assert b.consume() is True
+
+
 def test_attempt_budget_rejects_negative():
     with pytest.raises(ValueError, match="max_create"):
         AttemptBudget(max_create=-1)

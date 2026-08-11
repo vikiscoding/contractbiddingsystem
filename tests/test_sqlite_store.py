@@ -14,9 +14,11 @@ from opportunity_ingest.storage import (
     OpportunityStore,
     SkipDuplicate,
     SqliteOpportunityStore,
+    StoreWriteError,
     build_store,
     normalize_link,
 )
+from opportunity_ingest.storage.sqlite_store import _is_unique_constraint
 
 UTC = timezone.utc
 NOW = datetime(2026, 8, 10, 15, 30, 0, tzinfo=UTC)
@@ -191,3 +193,77 @@ def test_date_fields_serialized_as_text(store: SqliteOpportunityStore):
     assert row[0] == "2026-08-08"
     assert row[1] == "2026-08-20T14:00:00Z"
     assert row[2] == "2026-08-10T15:30:00Z"
+
+
+def test_opportunity_id_stripped_on_store(store: SqliteOpportunityStore):
+    store.create(_fields(OpportunityID="  PW-PADDED  ", Link="https://example.com/pad"))
+    keys = store.load_existing_keys()
+    assert "PW-PADDED" in keys.opportunity_ids
+    assert "  PW-PADDED  " not in keys.opportunity_ids
+    with sqlite3.connect(store.path) as conn:
+        oid = conn.execute(
+            "SELECT OpportunityID FROM contract_opportunities WHERE Link=?",
+            (normalize_link("https://example.com/pad"),),
+        ).fetchone()[0]
+    assert oid == "PW-PADDED"
+
+
+def test_empty_title_raises_store_write_error(store: SqliteOpportunityStore):
+    with pytest.raises(StoreWriteError, match="Title"):
+        store.create(_fields(Title=""))
+    with pytest.raises(StoreWriteError, match="Title"):
+        store.create(_fields(Title="   \t  "))
+
+
+def test_is_unique_constraint_classifies_messages():
+    assert _is_unique_constraint(
+        sqlite3.IntegrityError(
+            "UNIQUE constraint failed: contract_opportunities.OpportunityID"
+        )
+    )
+    assert _is_unique_constraint(
+        sqlite3.IntegrityError("UNIQUE constraint failed: contract_opportunities.Link")
+    )
+    assert not _is_unique_constraint(
+        sqlite3.IntegrityError(
+            "NOT NULL constraint failed: contract_opportunities.Title"
+        )
+    )
+    assert not _is_unique_constraint(
+        sqlite3.IntegrityError("CHECK constraint failed: RelevanceScore")
+    )
+
+
+def test_non_unique_integrity_error_is_store_write_error(
+    store: SqliteOpportunityStore, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: NOT NULL IntegrityError must not become SkipDuplicate."""
+    from unittest.mock import MagicMock
+
+    mock_conn = MagicMock()
+    mock_conn.__enter__.return_value = mock_conn
+    mock_conn.__exit__.return_value = None
+    mock_conn.execute.side_effect = sqlite3.IntegrityError(
+        "NOT NULL constraint failed: contract_opportunities.Title"
+    )
+    # Schema already ensured by fixture; only the insert connect is patched.
+    monkeypatch.setattr(store, "_connect", lambda: mock_conn)
+    with pytest.raises(StoreWriteError, match="integrity error") as exc_info:
+        store.create(_fields(OpportunityID="IE-1", Link="https://example.com/ie-1"))
+    assert not isinstance(exc_info.value, SkipDuplicate)
+
+
+def test_ensure_schema_runs_once(store: SqliteOpportunityStore, monkeypatch: pytest.MonkeyPatch):
+    calls = {"n": 0}
+    real = store._connect
+
+    def counting_connect() -> sqlite3.Connection:
+        calls["n"] += 1
+        return real()
+
+    # Schema already ready from fixture health_check; further ensure_schema is no-op.
+    monkeypatch.setattr(store, "_connect", counting_connect)
+    store.ensure_schema()
+    store.ensure_schema()
+    assert calls["n"] == 0
+    assert store._schema_ready is True

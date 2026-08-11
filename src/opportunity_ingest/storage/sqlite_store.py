@@ -86,6 +86,11 @@ def _fmt_datetime_utc(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _is_unique_constraint(exc: sqlite3.IntegrityError) -> bool:
+    """True only for UNIQUE constraint failures (not NOT NULL / CHECK / etc.)."""
+    return "UNIQUE" in str(exc).upper()
+
+
 class SqliteOpportunityStore:
     """Local SQLite backend for Contract Opportunities (day-1 default)."""
 
@@ -93,6 +98,7 @@ class SqliteOpportunityStore:
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
+        self._schema_ready = False
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,7 +109,9 @@ class SqliteOpportunityStore:
         return conn
 
     def ensure_schema(self) -> None:
-        """Create table and indexes if missing."""
+        """Create table and indexes if missing (once per process instance)."""
+        if self._schema_ready:
+            return
         try:
             with self._connect() as conn:
                 for stmt in DDL_STATEMENTS:
@@ -111,6 +119,7 @@ class SqliteOpportunityStore:
                 conn.commit()
         except sqlite3.Error as exc:
             raise StoreError(f"SQLite schema ensure failed at {self.path}: {exc}") from exc
+        self._schema_ready = True
 
     def health_check(self) -> None:
         """Open the DB and ensure schema; raise StoreError if unusable."""
@@ -132,8 +141,10 @@ class SqliteOpportunityStore:
                     "SELECT OpportunityID, Link FROM contract_opportunities"
                 ):
                     oid = row["OpportunityID"]
-                    if oid is not None and str(oid).strip():
-                        ids.add(str(oid))
+                    if oid is not None:
+                        oid_s = str(oid).strip()
+                        if oid_s:
+                            ids.add(oid_s)
                     link = row["Link"]
                     if link is not None:
                         links.add(normalize_link(str(link)))
@@ -144,22 +155,29 @@ class SqliteOpportunityStore:
     def create(self, fields: OpportunityFields) -> str:
         """Insert one opportunity; return string row id. Create-only (no updates).
 
-        Link is stored in normalized form for unique-index dedupe.
-        Unique violations raise ``SkipDuplicate``; other DB errors raise
+        OpportunityID is stripped; Link is stored normalized for unique-index dedupe.
+        UNIQUE violations raise ``SkipDuplicate``; other integrity / DB errors raise
         ``StoreWriteError``.
         """
         self.ensure_schema()
+        opportunity_id = str(fields.OpportunityID or "").strip()
+        title = str(fields.Title or "").strip()
         link_norm = normalize_link(fields.Link)
-        if not fields.OpportunityID or not str(fields.OpportunityID).strip():
+
+        if not opportunity_id:
             raise StoreWriteError("OpportunityID is required for create")
+        if not title:
+            raise StoreWriteError(
+                f"Title is required for OpportunityID={opportunity_id!r}"
+            )
         if not link_norm:
             raise StoreWriteError(
-                f"Link is required for OpportunityID={fields.OpportunityID!r}"
+                f"Link is required for OpportunityID={opportunity_id!r}"
             )
 
         values = (
-            fields.Title,
-            fields.OpportunityID,
+            title,
+            opportunity_id,
             fields.Source or "CanadaBuys",
             fields.Buyer,
             link_norm,
@@ -180,18 +198,22 @@ class SqliteOpportunityStore:
                 conn.commit()
                 row_id = cur.lastrowid
         except sqlite3.IntegrityError as exc:
-            # Unique on OpportunityID or Link — treat consistently as skip-duplicate.
-            raise SkipDuplicate(
-                f"Duplicate OpportunityID or Link for "
-                f"OpportunityID={fields.OpportunityID!r}: {exc}"
+            # Only UNIQUE → soft skip; NOT NULL / CHECK / etc. → hard write error.
+            if _is_unique_constraint(exc):
+                raise SkipDuplicate(
+                    f"Duplicate OpportunityID or Link for "
+                    f"OpportunityID={opportunity_id!r}: {exc}"
+                ) from exc
+            raise StoreWriteError(
+                f"SQLite integrity error for OpportunityID={opportunity_id!r}: {exc}"
             ) from exc
         except sqlite3.Error as exc:
             raise StoreWriteError(
-                f"SQLite create failed for OpportunityID={fields.OpportunityID!r}: {exc}"
+                f"SQLite create failed for OpportunityID={opportunity_id!r}: {exc}"
             ) from exc
 
         if row_id is None:
             raise StoreWriteError(
-                f"SQLite create returned no row id for OpportunityID={fields.OpportunityID!r}"
+                f"SQLite create returned no row id for OpportunityID={opportunity_id!r}"
             )
         return str(row_id)

@@ -30,15 +30,19 @@ def normalize_link(link: str) -> str:
 
 
 def is_duplicate(opportunity_id: str, link: str, keys: ExistingKeys) -> bool:
-    """True if OpportunityID or normalized Link is already present in ``keys``."""
-    if opportunity_id in keys.opportunity_ids:
+    """True if OpportunityID or normalized Link is already present in ``keys``.
+
+    OpportunityID is compared after strip (same shape the SQLite store persists).
+    """
+    oid = (opportunity_id or "").strip()
+    if oid in keys.opportunity_ids:
         return True
     return normalize_link(link) in keys.links
 
 
 def register_created(keys: ExistingKeys, opportunity_id: str, link: str) -> None:
     """Add keys after a successful create (avoids intra-run duplicates)."""
-    keys.opportunity_ids.add(opportunity_id)
+    keys.opportunity_ids.add((opportunity_id or "").strip())
     keys.links.add(normalize_link(link))
 
 
@@ -48,15 +52,18 @@ class AttemptBudget:
 
     ``max_create``:
       - ``N >= 1``: at most N create attempts (success or failure each count)
-      - ``0``: unlimited
+      - ``0`` or ``None``: unlimited (``None`` matches unset ``Settings.max_create``)
     """
 
-    max_create: int
+    max_create: int | None
     used: int = 0
 
     def __post_init__(self) -> None:
-        if self.max_create < 0:
-            raise ValueError("max_create must be >= 0 (0 = unlimited)")
+        # Coerce None → 0 (unlimited) so callers may pass Settings.max_create directly.
+        limit = 0 if self.max_create is None else int(self.max_create)
+        if limit < 0:
+            raise ValueError("max_create must be >= 0 (0/None = unlimited)")
+        self.max_create = limit
 
     @property
     def unlimited(self) -> bool:
@@ -66,6 +73,8 @@ class AttemptBudget:
         """Return True if another create attempt is allowed."""
         if self.unlimited:
             return True
+        # After __post_init__, max_create is always a non-negative int.
+        assert self.max_create is not None
         return self.used < self.max_create
 
     def consume(self) -> bool:

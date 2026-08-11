@@ -98,6 +98,14 @@ def test_register_created_updates_keys():
     assert is_duplicate("PW-9", "https://ex.com/z", keys)
 
 
+def test_is_duplicate_strips_opportunity_id():
+    keys = ExistingKeys(opportunity_ids={"PW-1"}, links=set())
+    assert is_duplicate("  PW-1  ", "https://other.example/x", keys) is True
+    register_created(keys, "  PW-2  ", "https://example.com/p2")
+    assert "PW-2" in keys.opportunity_ids
+    assert is_duplicate("PW-2", "https://example.com/other", keys) is True
+
+
 def test_precheck_skips_create_on_fake_store():
     store = FakeStore()
     store.create(_fields("A", "https://example.com/a"))
