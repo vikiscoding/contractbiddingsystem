@@ -1,8 +1,17 @@
 """Teams Workflows webhook notifications (Adaptive Card).
 
 Python owns primary notify for hard fail, high partial errors, and zero-new
-streak. Sets GitHub Actions step output ``notified=true`` so the workflow
-backup step can skip double-notify.
+streak. On successful Teams POST, sets GitHub Actions step output
+``notified=true`` so the workflow backup step can skip double-notify
+(``failure() && steps.ingest.outputs.notified != 'true'``).
+
+**GITHUB_OUTPUT ownership (KD-18):** When ``GITHUB_OUTPUT`` is set, notify
+ownership is complete only if that file is written after a successful webhook
+POST. Write is retried once; persistent failure logs at ERROR and returns
+``False`` (does not claim ``notified=true``). In that edge case Actions may
+still double-notify on job failure — operators should treat GITHUB_OUTPUT I/O
+errors as critical. When ``GITHUB_OUTPUT`` is unset (local runs), POST success
+alone is enough.
 """
 
 from __future__ import annotations
@@ -19,18 +28,43 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
-def set_github_output_notified(notified: bool = True) -> None:
-    """Append ``notified=true|false`` to ``GITHUB_OUTPUT`` when running in Actions."""
+class NotifyError(Exception):
+    """Teams webhook or GITHUB_OUTPUT handoff failure (non-fatal to exit matrix)."""
+
+
+def set_github_output_notified(notified: bool = True) -> bool:
+    """Append ``notified=true|false`` to ``GITHUB_OUTPUT`` when running in Actions.
+
+    Returns:
+        True if env is unset (no handoff needed) or write succeeded.
+
+    Raises:
+        NotifyError: if ``GITHUB_OUTPUT`` is set but unwritable after one retry.
+    """
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
-        return
+        return True
     value = "true" if notified else "false"
-    try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(f"notified={value}\n")
-        logger.info("Wrote GITHUB_OUTPUT notified=%s", value)
-    except OSError as exc:
-        logger.warning("Could not write GITHUB_OUTPUT: %s", exc)
+    last_exc: OSError | None = None
+    for attempt in range(2):
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(f"notified={value}\n")
+            logger.info("Wrote GITHUB_OUTPUT notified=%s", value)
+            return True
+        except OSError as exc:
+            last_exc = exc
+            logger.warning(
+                "GITHUB_OUTPUT write attempt %s/2 failed (%s): %s",
+                attempt + 1,
+                path,
+                exc,
+            )
+    raise NotifyError(
+        f"GITHUB_OUTPUT unwritable after retry ({path}): {last_exc}. "
+        "Teams may already have been notified; Actions failure backup may "
+        "double-notify if job exits non-zero."
+    )
 
 
 def build_adaptive_card_payload(
@@ -137,10 +171,6 @@ def post_teams_webhook(
         raise NotifyError("Teams webhook request timed out") from exc
 
 
-class NotifyError(Exception):
-    """Teams webhook delivery failure (non-fatal to exit matrix; still logged)."""
-
-
 def notify_ingest_alert(
     webhook_url: str | None,
     *,
@@ -153,8 +183,13 @@ def notify_ingest_alert(
 ) -> bool:
     """Send ingest alert if webhook configured.
 
-    Returns True if a notification was attempted and succeeded (and optionally
-    sets ``notified=true`` for Actions). Returns False if webhook unset or send failed.
+    Returns True only when ownership is complete:
+    - webhook POST succeeded, and
+    - if ``set_github_output`` and ``GITHUB_OUTPUT`` is set: handoff write succeeded.
+
+    Returns False if webhook unset, POST failed, or GITHUB_OUTPUT handoff failed
+    after a successful POST (does **not** claim notified ownership; dual-notify
+    risk remains for non-zero job exits — logged at ERROR).
     """
     if not webhook_url or not str(webhook_url).strip():
         logger.warning(
@@ -177,5 +212,15 @@ def notify_ingest_alert(
 
     logger.info("Teams notify sent (reason=%s)", reason)
     if set_github_output:
-        set_github_output_notified(True)
+        try:
+            set_github_output_notified(True)
+        except NotifyError as exc:
+            # Do not claim notified=True: Actions backup keys off GITHUB_OUTPUT.
+            logger.error(
+                "Teams notify delivered (reason=%s) but GITHUB_OUTPUT handoff "
+                "failed — not claiming notified ownership: %s",
+                reason,
+                exc,
+            )
+            return False
     return True

@@ -126,14 +126,40 @@ def test_notify_ingest_alert_failure_returns_false():
 
 def test_set_github_output_notified_no_env(monkeypatch):
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    set_github_output_notified(True)  # no-op
+    assert set_github_output_notified(True) is True  # no handoff needed
 
 
 def test_set_github_output_notified_writes(tmp_path: Path, monkeypatch):
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
-    set_github_output_notified(True)
-    set_github_output_notified(False)
+    assert set_github_output_notified(True) is True
+    assert set_github_output_notified(False) is True
     text = out.read_text(encoding="utf-8")
     assert "notified=true" in text
     assert "notified=false" in text
+
+
+def test_set_github_output_raises_when_unwritable(tmp_path: Path, monkeypatch):
+    # Point at a path whose parent cannot be written as a file (directory as file).
+    bad = tmp_path / "not_a_file_dir"
+    bad.mkdir()
+    monkeypatch.setenv("GITHUB_OUTPUT", str(bad))  # open() on a directory fails
+    with pytest.raises(NotifyError, match="GITHUB_OUTPUT unwritable"):
+        set_github_output_notified(True)
+
+
+def test_notify_returns_false_when_github_output_handoff_fails(
+    tmp_path: Path, monkeypatch
+):
+    """Teams POST succeeded but GITHUB_OUTPUT failed → do not claim notified."""
+    bad = tmp_path / "dir_as_output"
+    bad.mkdir()
+    monkeypatch.setenv("GITHUB_OUTPUT", str(bad))
+    with patch("opportunity_ingest.notify.post_teams_webhook") as post:
+        ok = notify_ingest_alert(
+            "https://example.com/hook",
+            reason="hard_fail",
+            set_github_output=True,
+        )
+    assert post.called
+    assert ok is False

@@ -31,8 +31,18 @@ class Settings(BaseSettings):
     keywords_path: Path = Field(default=Path("config/keywords.yaml"))
     state_path: Path = Field(default=Path("state/zero_new_streak.json"))
     log_level: str = Field(default="INFO")
-    max_create: int | None = Field(default=None)
-    dry_run: bool = Field(default=False)
+    # Soft create-attempt budget (KD-17). 0 = unlimited; negatives rejected.
+    max_create: int | None = Field(
+        default=50,
+        description="Create-attempt budget (default 50; 0=unlimited)",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "Loaded from DRY_RUN env for observability only. "
+            "Does not enable or disable writes; only --write persists."
+        ),
+    )
     canadabuys_csv_url: str | None = Field(default=None)
     http_timeout_seconds: float = Field(default=120.0)
     zero_new_streak_threshold: int = Field(default=3)
@@ -55,6 +65,14 @@ class Settings(BaseSettings):
     def _normalize_backend(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip().lower()
+        return v
+
+    @field_validator("max_create")
+    @classmethod
+    def _max_create_non_negative(cls, v: int | None) -> int | None:
+        """Reject negative MAX_CREATE from env/settings (mirrors CLI --max-create)."""
+        if v is not None and int(v) < 0:
+            raise ValueError("max_create must be >= 0 (0=unlimited)")
         return v
 
     def resolved_sqlite_path(self) -> Path:

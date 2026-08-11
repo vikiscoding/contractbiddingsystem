@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,8 +12,10 @@ import pytest
 
 from opportunity_ingest.cli import main
 from opportunity_ingest.config import Settings
+from opportunity_ingest.models import ExistingKeys, OpportunityFields
 from opportunity_ingest.pipeline import run_pipeline
-from opportunity_ingest.state import load_zero_new_streak
+from opportunity_ingest.state import ZeroNewStreakState, load_zero_new_streak, save_zero_new_streak
+from opportunity_ingest.storage.base import StoreWriteError
 from opportunity_ingest.storage.sqlite_store import SqliteOpportunityStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -135,16 +138,16 @@ def test_zero_new_streak_notifies_at_threshold(settings: Settings, tmp_path: Pat
             "teams_webhook_url": "https://example.com/hook",
         }
     )
-    # Seed empty DB + two zero-add days via streak file path simulation:
-    # First write with empty filtered would need empty candidates — use max_create
-    # after already full store.
+    # Day 0: seed store with adds (resets streak).
     run_pipeline(
         settings,
         write=True,
         csv_path=PIPELINE_CSV,
         write_log=False,
         logs_dir=tmp_path / "logs",
+        today=date(2026, 8, 1),
     )
+    # Day 1 zero-new: streak=1, below threshold.
     with patch("opportunity_ingest.pipeline.notify_ingest_alert", return_value=True) as n1:
         m1 = run_pipeline(
             settings,
@@ -152,11 +155,26 @@ def test_zero_new_streak_notifies_at_threshold(settings: Settings, tmp_path: Pat
             csv_path=PIPELINE_CSV,
             write_log=False,
             logs_dir=tmp_path / "logs",
+            today=date(2026, 8, 2),
         )
     assert m1.consecutive_zero_new_days == 1
     assert m1.notified is False
     n1.assert_not_called()
 
+    # Same calendar day re-run: must not double-count.
+    with patch("opportunity_ingest.pipeline.notify_ingest_alert", return_value=True) as n_same:
+        m_same = run_pipeline(
+            settings,
+            write=True,
+            csv_path=PIPELINE_CSV,
+            write_log=False,
+            logs_dir=tmp_path / "logs",
+            today=date(2026, 8, 2),
+        )
+    assert m_same.consecutive_zero_new_days == 1
+    n_same.assert_not_called()
+
+    # Day 2 zero-new: streak=2 → notify.
     with patch("opportunity_ingest.pipeline.notify_ingest_alert", return_value=True) as n2:
         m2 = run_pipeline(
             settings,
@@ -164,6 +182,7 @@ def test_zero_new_streak_notifies_at_threshold(settings: Settings, tmp_path: Pat
             csv_path=PIPELINE_CSV,
             write_log=False,
             logs_dir=tmp_path / "logs",
+            today=date(2026, 8, 3),
         )
     assert m2.consecutive_zero_new_days == 2
     assert m2.notified is True
@@ -184,6 +203,94 @@ def test_hard_fail_missing_csv(settings: Settings, tmp_path: Path):
     assert metrics.exit_code == 1
     assert metrics.hard_fail is True
     assert metrics.notify_reason == "hard_fail"
+
+
+def test_hard_fail_loads_on_disk_streak_into_metrics(settings: Settings, tmp_path: Path):
+    save_zero_new_streak(
+        settings.state_path,
+        ZeroNewStreakState(
+            consecutive_zero_new_days=7,
+            last_zero_new_date="2026-08-01",
+        ),
+    )
+    with patch("opportunity_ingest.pipeline.notify_ingest_alert", return_value=False):
+        metrics = run_pipeline(
+            settings,
+            write=False,
+            csv_path=tmp_path / "missing.csv",
+            write_log=False,
+            logs_dir=tmp_path / "logs",
+        )
+    assert metrics.hard_fail is True
+    assert metrics.consecutive_zero_new_days == 7
+
+
+def test_negative_max_create_hard_fails_before_budget(settings: Settings, tmp_path: Path):
+    # Bypass Settings validator by mutating after construct (simulates bad caller).
+    with patch("opportunity_ingest.pipeline.notify_ingest_alert", return_value=False):
+        metrics = run_pipeline(
+            settings,
+            write=False,
+            csv_path=PIPELINE_CSV,
+            max_create=-3,
+            write_log=False,
+            logs_dir=tmp_path / "logs",
+        )
+    assert metrics.hard_fail is True
+    assert metrics.exit_code == 1
+    assert metrics.hard_fail_reason is not None
+    assert "max_create" in metrics.hard_fail_reason
+
+
+class _FailingStore:
+    """Store that fails every create (for partial-error integration)."""
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def health_check(self) -> None:
+        return None
+
+    def load_existing_keys(self) -> ExistingKeys:
+        return ExistingKeys.empty()
+
+    def create(self, fields: OpportunityFields) -> str:
+        self.attempts += 1
+        raise StoreWriteError(f"forced fail for {fields.OpportunityID}")
+
+
+def test_partial_errors_exit_and_notify_via_run_pipeline(
+    settings: Settings, tmp_path: Path
+):
+    settings = settings.model_copy(
+        update={
+            "partial_error_exit_threshold": 2,
+            "teams_webhook_url": "https://example.com/hook",
+            "max_create": 10,
+        }
+    )
+    store = _FailingStore()
+    with patch("opportunity_ingest.pipeline.notify_ingest_alert", return_value=True) as n:
+        metrics = run_pipeline(
+            settings,
+            write=True,
+            csv_path=PIPELINE_CSV,
+            store=store,
+            write_log=False,
+            logs_dir=tmp_path / "logs",
+            today=date(2026, 8, 10),
+        )
+    assert metrics.error_count == 3  # 3 filtered candidates
+    assert metrics.added_count == 0
+    assert metrics.create_attempts == 3
+    assert store.attempts == 3
+    assert metrics.exit_code == 1
+    assert metrics.notify_reason == "partial_errors"
+    assert metrics.notified is True
+    n.assert_called_once()
+    assert n.call_args.kwargs["reason"] == "partial_errors"
 
 
 def test_dry_run_with_existing_loads_keys(settings: Settings, tmp_path: Path):

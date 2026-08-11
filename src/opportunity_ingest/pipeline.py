@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -98,19 +98,38 @@ def resolve_write_mode(
     *,
     write_flag: bool,
     dry_run_flag: bool,
-    dry_run_env: bool,
+    dry_run_env: bool = False,
 ) -> bool:
     """Return True only when ``--write`` is set.
 
-    ``DRY_RUN`` env never enables write alone. Default (neither flag) is dry-run.
-    ``dry_run_env`` is accepted for logging/compatibility only.
+    Write gating:
+    - Only ``--write`` enables persistence.
+    - ``DRY_RUN`` env never enables write alone and never disables ``--write``.
+    - Default (neither CLI flag) is dry-run.
     """
-    del dry_run_env  # never enables write; documented for callers
+    if dry_run_env:
+        logger.debug(
+            "DRY_RUN env is set but does not change write gating "
+            "(only --write persists; --write is not blocked by DRY_RUN)"
+        )
     if write_flag:
         return True
     if dry_run_flag:
         return False
     return False
+
+
+def _validate_max_create(max_create: int | None) -> int | None:
+    """Ensure max_create is None or >= 0 before AttemptBudget (env + CLI defense)."""
+    if max_create is None:
+        return None
+    n = int(max_create)
+    if n < 0:
+        raise PipelineHardFail(
+            "max_create",
+            f"max_create must be >= 0 (0=unlimited); got {n}",
+        )
+    return n
 
 
 def _load_tenders(
@@ -201,15 +220,30 @@ def _process_candidates(
 
         if not write:
             # Dry-run: count as would-create / attempt without calling store.create.
-            assert budget.consume()
+            if not budget.consume():
+                skipped_max += 1
+                continue
             attempts += 1
             would_create += 1
             # Register so intra-run dups are skipped (mirrors write path).
             register_created(keys, fields.OpportunityID, fields.Link)
             continue
 
-        assert store is not None
-        assert budget.consume()
+        if store is None:
+            logger.error(
+                "Write path missing store for OpportunityID=%s; treating as error",
+                fields.OpportunityID,
+            )
+            if not budget.consume():
+                skipped_max += 1
+                continue
+            attempts += 1
+            errors += 1
+            continue
+
+        if not budget.consume():
+            skipped_max += 1
+            continue
         attempts += 1
         try:
             store.create(fields)
@@ -247,10 +281,13 @@ def _process_candidates(
 
 
 def write_run_log(metrics: RunMetrics, logs_dir: str | Path = "logs") -> Path:
-    """Write ``logs/run-<utc-timestamp>.json`` and return its path."""
+    """Write ``logs/run-<utc-timestamp>.json`` and return its path.
+
+    Filename includes microseconds to avoid same-second overwrites.
+    """
     out_dir = Path(logs_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = out_dir / f"run-{ts}.json"
     path.write_text(
         json.dumps(metrics.to_log_dict(), indent=2, default=str) + "\n",
@@ -258,6 +295,15 @@ def write_run_log(metrics: RunMetrics, logs_dir: str | Path = "logs") -> Path:
     )
     logger.info("Wrote run log %s", path)
     return path
+
+
+def _best_effort_load_streak(settings: Settings, metrics: RunMetrics) -> None:
+    """Load on-disk streak into metrics without saving (observability)."""
+    try:
+        current = load_zero_new_streak(settings.state_path)
+        metrics.consecutive_zero_new_days = current.consecutive_zero_new_days
+    except Exception as exc:  # noqa: BLE001 — never fail run for observability
+        logger.warning("Could not load streak for metrics: %s", exc)
 
 
 def run_pipeline(
@@ -270,22 +316,28 @@ def run_pipeline(
     store: OpportunityStore | None = None,
     logs_dir: str | Path = "logs",
     write_log: bool = True,
+    today: date | None = None,
 ) -> RunMetrics:
     """Execute one ingest run. Never raises for soft create errors.
 
     Hard failures set ``metrics.hard_fail`` and return (caller still applies notify
     + exit). Unexpected exceptions propagate.
+
+    ``today``: optional UTC date override for calendar-day streak (tests).
     """
+    resolved_max = max_create if max_create is not None else settings.max_create
     metrics = RunMetrics(
         dry_run=not write,
         write=write,
         with_existing=with_existing,
         storage_backend=(settings.storage_backend or "sqlite"),
-        max_create=max_create if max_create is not None else settings.max_create,
+        max_create=resolved_max,
         zero_new_streak_threshold=settings.zero_new_streak_threshold,
     )
 
     try:
+        metrics.max_create = _validate_max_create(metrics.max_create)
+
         records, source = _load_tenders(csv_path=csv_path, settings=settings)
         metrics.csv_source = source
         metrics.parsed_count = len(records)
@@ -324,7 +376,12 @@ def run_pipeline(
             )
             metrics.storage_backend = active_store.name
 
-        budget = AttemptBudget(max_create=metrics.max_create)
+        try:
+            budget = AttemptBudget(max_create=metrics.max_create)
+        except ValueError as exc:
+            # Defense in depth if a non-Settings caller passes a bad value.
+            raise PipelineHardFail("max_create", str(exc)) from exc
+
         stats = _process_candidates(
             candidates,
             store=active_store if write else None,
@@ -339,22 +396,33 @@ def run_pipeline(
         metrics.would_create_count = stats["would_create"]
         metrics.create_attempts = stats["attempts"]
 
-        # Streak: write runs only.
+        # Streak: write runs only (UTC calendar-day semantics).
         streak_reached = False
+        streak_day = today if today is not None else datetime.now(UTC).date()
         if write:
             prior = load_zero_new_streak(settings.state_path)
             new_state = update_streak_after_write(
-                prior, added_count=metrics.added_count
+                prior,
+                added_count=metrics.added_count,
+                today=streak_day,
             )
-            save_zero_new_streak(settings.state_path, new_state)
+            try:
+                save_zero_new_streak(settings.state_path, new_state)
+            except OSError as exc:
+                # Soft-continue: creates already applied; keep exit matrix.
+                logger.error(
+                    "Failed to save zero-new streak state (%s): %s",
+                    settings.state_path,
+                    exc,
+                )
+                metrics.extra["streak_save_error"] = str(exc)
             metrics.consecutive_zero_new_days = new_state.consecutive_zero_new_days
             streak_reached = streak_meets_threshold(
                 new_state, settings.zero_new_streak_threshold
             )
         else:
             # Report current streak for observability without mutating.
-            current = load_zero_new_streak(settings.state_path)
-            metrics.consecutive_zero_new_days = current.consecutive_zero_new_days
+            _best_effort_load_streak(settings, metrics)
 
         decision = resolve_exit_decision(
             hard_fail=False,
@@ -402,6 +470,8 @@ def run_pipeline(
         metrics.hard_fail_reason = f"{exc.reason}: {exc.message}"
         metrics.exit_code = EXIT_FAILURE
         metrics.notify_reason = "hard_fail"
+        # Observability: report on-disk streak even when run failed early.
+        _best_effort_load_streak(settings, metrics)
         metrics.notified = notify_ingest_alert(
             settings.teams_webhook_url,
             reason="hard_fail",

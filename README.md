@@ -31,6 +31,9 @@ cp .env.example .env
 | `STORAGE_BACKEND` | **`sqlite`** | Backend selector: `sqlite` (day-1) or `sharepoint` (later) |
 | `DATA_DIR` | `data` | Directory for SQLite DB and exports |
 | `SQLITE_PATH` | `{DATA_DIR}/contract_opportunities.db` | Explicit DB path |
+| `MAX_CREATE` | **`50`** | Create-attempt budget (`0` = unlimited; negatives rejected) |
+| `ZERO_NEW_STREAK_THRESHOLD` | `3` | Notify after N UTC calendar zero-new days |
+| `PARTIAL_ERROR_EXIT_THRESHOLD` | `5` | Exit 1 + notify when create errors ≥ N |
 
 No Azure/SharePoint secrets are required when `STORAGE_BACKEND=sqlite`.
 
@@ -43,7 +46,7 @@ python -m opportunity_ingest check-store
 python -m opportunity_ingest export-csv [--out PATH]
 ```
 
-- **`run`** — dry-run by default (no writes). Use `--write` to persist to the configured store.
+- **`run`** — dry-run by default (no writes). **Only `--write` persists.** `DRY_RUN` env does not enable writes and does not disable `--write`.
 - **`download-sample`** — fetch a sample open-tender CSV.
 - **`check-store`** — health-check the configured backend + sample key load.
 - **`export-csv`** — export stored opportunities for human review (sqlite primary; SharePoint not supported yet).

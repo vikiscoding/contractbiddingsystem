@@ -6,6 +6,9 @@ Commands:
   python -m opportunity_ingest download-sample [--out PATH]
   python -m opportunity_ingest check-store
   python -m opportunity_ingest export-csv [--out PATH]
+
+Write gating: only ``--write`` persists. ``DRY_RUN`` env never enables write and
+does not disable ``--write``. Default (neither flag) is dry-run.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from pathlib import Path
 
 from opportunity_ingest.config import Settings, get_settings
 from opportunity_ingest.download import DEFAULT_SAMPLE_PATH, DownloadError, download_to_path
-from opportunity_ingest.exit_codes import EXIT_USAGE
+from opportunity_ingest.exit_codes import EXIT_FAILURE, EXIT_USAGE
 from opportunity_ingest.logging_setup import setup_logging
 from opportunity_ingest.pipeline import resolve_write_mode, run_pipeline
 from opportunity_ingest.storage.base import StoreError
@@ -36,7 +39,7 @@ def cmd_download_sample(out_path: str | None) -> int:
         path = download_to_path(out_path if out_path is not None else DEFAULT_SAMPLE_PATH)
     except DownloadError as exc:
         print(f"error: download failed: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILURE
     print(f"Wrote {path}")
     return 0
 
@@ -46,7 +49,12 @@ def cmd_run(
     settings: Settings | None = None,
 ) -> int:
     """Run the full ingest pipeline (dry-run default; ``--write`` persists)."""
-    settings = settings or get_settings()
+    try:
+        settings = settings or get_settings()
+    except Exception as exc:  # pydantic ValidationError for bad MAX_CREATE, etc.
+        print(f"error: invalid settings: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
     setup_logging(settings.log_level)
 
     write = resolve_write_mode(
@@ -60,6 +68,11 @@ def cmd_run(
     max_create = args.max_create
     if max_create is None:
         max_create = settings.max_create
+    # Env-sourced negative should already fail Settings validation; belt-and-suspenders.
+    if max_create is not None and max_create < 0:
+        return _usage_error(
+            f"MAX_CREATE/--max-create must be >= 0 (0=unlimited); got {max_create}"
+        )
 
     metrics = run_pipeline(
         settings,
@@ -86,19 +99,23 @@ def cmd_run(
 
 def cmd_check_store(settings: Settings | None = None) -> int:
     """Health-check backend + sample key load (backend-neutral)."""
-    settings = settings or get_settings()
+    try:
+        settings = settings or get_settings()
+    except Exception as exc:
+        print(f"error: invalid settings: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     setup_logging(settings.log_level)
     try:
         store = build_store(settings)
     except (ValueError, NotImplementedError) as exc:
         print(f"error: store config: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILURE
     try:
         store.health_check()
         keys = store.load_existing_keys()
     except StoreError as exc:
         print(f"error: store health check failed: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILURE
 
     print(
         f"ok backend={store.name} "
@@ -117,7 +134,11 @@ def cmd_export_csv(
     SharePoint export is not supported in this release; use STORAGE_BACKEND=sqlite
     or query Graph separately when activated.
     """
-    settings = settings or get_settings()
+    try:
+        settings = settings or get_settings()
+    except Exception as exc:
+        print(f"error: invalid settings: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     setup_logging(settings.log_level)
 
     backend = (settings.storage_backend or "sqlite").strip().lower()
@@ -128,20 +149,20 @@ def cmd_export_csv(
             f"export from sqlite or use Graph tooling when SP is activated.",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_FAILURE
 
     try:
         store = build_store(settings)
     except (ValueError, NotImplementedError) as exc:
         print(f"error: store config: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILURE
 
     if not isinstance(store, SqliteOpportunityStore):
         print(
             "error: export-csv requires SqliteOpportunityStore",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_FAILURE
 
     out = Path(out_path) if out_path else settings.data_dir / "export-opportunities.csv"
     try:
@@ -149,10 +170,10 @@ def cmd_export_csv(
         count = store.export_csv(out)
     except StoreError as exc:
         print(f"error: export failed: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILURE
     except OSError as exc:
         print(f"error: cannot write CSV {out}: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILURE
 
     print(f"Wrote {count} rows to {out}")
     return 0
@@ -161,17 +182,26 @@ def cmd_export_csv(
 def build_parser() -> argparse.ArgumentParser:
     # Omit prog= so usage reflects the invoked name (module or console script).
     parser = argparse.ArgumentParser(
-        description="CanadaBuys open tender → contract opportunities store",
+        description=(
+            "CanadaBuys open tender → contract opportunities store. "
+            "Only --write persists; DRY_RUN env does not enable or block writes."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # run [--write | --dry-run] [--csv PATH] [--max-create N] [--with-existing]
-    run_p = sub.add_parser("run", help="Download/filter/dedupe and optionally write opportunities")
+    run_p = sub.add_parser(
+        "run",
+        help=(
+            "Download/filter/dedupe and optionally write opportunities "
+            "(default dry-run; only --write persists)"
+        ),
+    )
     mode = run_p.add_mutually_exclusive_group()
     mode.add_argument(
         "--write",
         action="store_true",
-        help="Persist creates via configured storage backend",
+        help="Persist creates via configured storage backend (only way to write)",
     )
     mode.add_argument(
         "--dry-run",
@@ -183,7 +213,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-create",
         type=int,
         metavar="N",
-        help="Create-attempt budget for this run (N>=1; 0=unlimited)",
+        help=(
+            "Create-attempt budget for this run "
+            "(N>=1; 0=unlimited; default from MAX_CREATE env, package default 50)"
+        ),
     )
     run_p.add_argument(
         "--with-existing",
