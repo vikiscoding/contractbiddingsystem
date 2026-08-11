@@ -69,13 +69,13 @@ Daily workflow: [`.github/workflows/daily-canadabuys-ingest.yml`](.github/workfl
 | `schedule` | `0 14 * * *` (14:00 UTC) |
 | `workflow_dispatch` | Manual run; optional `max_create` / `dry_run` inputs |
 
-**Defaults:** `STORAGE_BACKEND=sqlite`, soft `--max-create` from repo variable `INGEST_MAX_CREATE` (default **50**). Cache rotates `data/` + `state/` with `run_id` / `run_attempt`. Python owns Teams notify; Actions posts a backup Adaptive Card only when the job fails and step output `notified != true`.
+**Defaults:** `STORAGE_BACKEND=sqlite`, soft `--max-create` from repo variable `INGEST_MAX_CREATE` (default **50**). Cache rotates `data/` + `state/` with unique `run_id` / `run_attempt` keys (prefix `canadabuys-ingest-`). Cache is **best-effort** continuity only (eviction, size caps, unused expiry) — each run’s artifact (`data/*.db`, `state/`, `logs/`) is the recovery path if cache is missing or stale. Python owns Teams notify; Actions posts a backup Adaptive Card only when the **ingest step** did not succeed and step output `notified != true` (post-ingest infra failures do not false-alarm).
 
 ### Secrets
 
 | Name | Required (day-1 sqlite) | Purpose |
 |------|-------------------------|---------|
-| `TEAMS_WEBHOOK_URL` | **Required for alerts** (strongly recommended) | Teams Workflows webhook for hard fail / zero-new streak / partial-error alerts |
+| `TEAMS_WEBHOOK_URL` | Recommended (alerts silent if unset) | Teams Workflows webhook for hard fail / zero-new streak / partial-error alerts |
 | `AZURE_TENANT_ID` | No | Only when `STORAGE_BACKEND=sharepoint` |
 | `AZURE_CLIENT_ID` | No | Only when SharePoint activated |
 | `AZURE_CLIENT_SECRET` | No | Only when SharePoint activated |

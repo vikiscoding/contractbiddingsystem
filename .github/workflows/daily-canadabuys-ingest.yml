@@ -9,11 +9,13 @@ on:
       max_create:
         description: "Override attempt cap (empty = INGEST_MAX_CREATE / 50)"
         required: false
+        type: string
         default: ""
       dry_run:
         description: "If true, no writes (omit --write)"
         required: false
-        default: "false"
+        type: boolean
+        default: false
 
 concurrency:
   group: canadabuys-ingest
@@ -66,9 +68,9 @@ jobs:
           path: |
             state
             data
-          key: canadabuys-zero-streak-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: canadabuys-ingest-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            canadabuys-zero-streak-${{ runner.os }}-
+            canadabuys-ingest-${{ runner.os }}-
 
       - name: Ensure state/data/logs dirs
         run: mkdir -p state data logs
@@ -77,6 +79,7 @@ jobs:
         id: ingest
         run: |
           EXTRA="--write"
+          # Boolean workflow_dispatch input serializes as "true" / "false" strings.
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             EXTRA="--dry-run"
           fi
@@ -86,6 +89,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ingest-${{ github.run_id }}-${{ github.run_attempt }}
@@ -95,8 +99,10 @@ jobs:
             state/
           if-no-files-found: ignore
 
+      # Backup only when ingest itself did not succeed and Python did not own notify.
+      # Do not fire on post-ingest infra failures (artifact upload, cache save).
       - name: Notify Teams on unhandled failure
-        if: failure() && steps.ingest.outputs.notified != 'true'
+        if: failure() && steps.ingest.outcome != 'success' && steps.ingest.outputs.notified != 'true'
         env:
           TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -168,4 +174,4 @@ jobs:
           path: |
             state
             data
-          key: canadabuys-zero-streak-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: canadabuys-ingest-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
