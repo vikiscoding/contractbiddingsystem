@@ -1,0 +1,171 @@
+name: Daily CanadaBuys Opportunity Ingest
+
+on:
+  schedule:
+    # 14:00 UTC daily
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      max_create:
+        description: "Override attempt cap (empty = INGEST_MAX_CREATE / 50)"
+        required: false
+        default: ""
+      dry_run:
+        description: "If true, no writes (omit --write)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: canadabuys-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+      STORAGE_BACKEND: sqlite
+      DATA_DIR: data
+      KEYWORDS_PATH: config/keywords.yaml
+      STATE_PATH: state/zero_new_streak.json
+      ZERO_NEW_STREAK_THRESHOLD: "3"
+      PARTIAL_ERROR_EXIT_THRESHOLD: "5"
+      # Soft attempt budget: workflow_dispatch override → repo variable → 50
+      MAX_CREATE: ${{ github.event.inputs.max_create != '' && github.event.inputs.max_create || vars.INGEST_MAX_CREATE || 50 }}
+      # SharePoint / Azure secrets only needed when STORAGE_BACKEND=sharepoint
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
+      SHAREPOINT_LIST_ID: ${{ secrets.SHAREPOINT_LIST_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Restore data+state cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state
+            data
+          key: canadabuys-zero-streak-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            canadabuys-zero-streak-${{ runner.os }}-
+
+      - name: Ensure state/data/logs dirs
+        run: mkdir -p state data logs
+
+      - name: Run ingest
+        id: ingest
+        run: |
+          EXTRA="--write"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            EXTRA="--dry-run"
+          fi
+          # Always pass soft MAX_CREATE (0 = unlimited). Default via vars / 50.
+          EXTRA="$EXTRA --max-create ${MAX_CREATE}"
+          python -m opportunity_ingest run $EXTRA
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/*.db
+            logs/
+            state/
+          if-no-files-found: ignore
+
+      - name: Notify Teams on unhandled failure
+        if: failure() && steps.ingest.outputs.notified != 'true'
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          url = (os.environ.get("TEAMS_WEBHOOK_URL") or "").strip()
+          if not url:
+              print("TEAMS_WEBHOOK_URL unset; skip backup notify", file=sys.stderr)
+              sys.exit(0)
+
+          run_url = os.environ.get("GITHUB_RUN_URL", "")
+          payload = {
+              "type": "message",
+              "attachments": [
+                  {
+                      "contentType": "application/vnd.microsoft.card.adaptive",
+                      "contentUrl": None,
+                      "content": {
+                          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                          "type": "AdaptiveCard",
+                          "version": "1.4",
+                          "body": [
+                              {
+                                  "type": "TextBlock",
+                                  "weight": "Bolder",
+                                  "text": "CanadaBuys ingest failed",
+                                  "wrap": True,
+                              },
+                              {
+                                  "type": "FactSet",
+                                  "facts": [
+                                      {"title": "Run", "value": run_url or "(unknown)"},
+                                      {
+                                          "title": "Reason",
+                                          "value": "github_actions_unhandled_failure",
+                                      },
+                                  ],
+                              },
+                          ],
+                      },
+                  }
+              ],
+          }
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  print(f"Backup Teams notify status={resp.status}")
+          except urllib.error.URLError as exc:
+              print(f"Backup Teams notify failed: {exc}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Save data+state cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state
+            data
+          key: canadabuys-zero-streak-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}

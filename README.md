@@ -60,6 +60,47 @@ pytest
 
 CI (`.github/workflows/ci.yml`) runs on push/PR: install deps, `ruff check`, `pytest` on Python 3.11+.
 
+## Scheduled ingest (GitHub Actions)
+
+Daily workflow: [`.github/workflows/daily-canadabuys-ingest.yml`](.github/workflows/daily-canadabuys-ingest.yml)
+
+| Trigger | Detail |
+|---------|--------|
+| `schedule` | `0 14 * * *` (14:00 UTC) |
+| `workflow_dispatch` | Manual run; optional `max_create` / `dry_run` inputs |
+
+**Defaults:** `STORAGE_BACKEND=sqlite`, soft `--max-create` from repo variable `INGEST_MAX_CREATE` (default **50**). Cache rotates `data/` + `state/` with `run_id` / `run_attempt`. Python owns Teams notify; Actions posts a backup Adaptive Card only when the job fails and step output `notified != true`.
+
+### Secrets
+
+| Name | Required (day-1 sqlite) | Purpose |
+|------|-------------------------|---------|
+| `TEAMS_WEBHOOK_URL` | **Required for alerts** (strongly recommended) | Teams Workflows webhook for hard fail / zero-new streak / partial-error alerts |
+| `AZURE_TENANT_ID` | No | Only when `STORAGE_BACKEND=sharepoint` |
+| `AZURE_CLIENT_ID` | No | Only when SharePoint activated |
+| `AZURE_CLIENT_SECRET` | No | Only when SharePoint activated |
+| `SHAREPOINT_SITE_ID` | No | Only when SharePoint activated |
+| `SHAREPOINT_LIST_ID` | No | Only when SharePoint activated |
+
+Azure / SharePoint secrets are **optional until SP activation**. Day-1 schedule does not need them.
+
+### Variables
+
+| Name | Default | Purpose |
+|------|---------|---------|
+| `INGEST_MAX_CREATE` | **`50`** | Soft create-attempt budget for the schedule (`0` = unlimited). Override per run via `workflow_dispatch` → `max_create`. |
+
+Set under **Settings → Secrets and variables → Actions → Variables**.
+
+### Calibration checklist
+
+1. Live dry-run: note downloaded / filtered / would-create counts.
+2. Check `max(len(link))` on live URLs (Link field must never truncate).
+3. Tune keywords (engineering-owned `config/keywords.yaml`).
+4. Smoke write: `python -m opportunity_ingest run --write --max-create 10` against sqlite.
+5. Enable schedule with `INGEST_MAX_CREATE=50`.
+6. **Steady-state rule:** raise variable to **100** if typical filtered volume is &lt; 30/day; set **0** (unlimited) only after **7 consecutive dry-runs** with &lt; 50 filtered candidates/day. Do not uncap on a single quiet day.
+
 ## Layout
 
 ```text
@@ -69,6 +110,7 @@ config/                   # keywords + settings examples
 data/                     # local SQLite + exports (gitignored contents)
 state/                    # streak state (gitignored JSON)
 logs/                     # run logs (gitignored)
+.github/workflows/        # ci.yml + daily-canadabuys-ingest.yml
 ```
 
 ## Design
