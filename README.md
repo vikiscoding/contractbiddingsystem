@@ -24,6 +24,19 @@ cp .env.example .env
 # or: cp config/settings.example.env .env
 ```
 
+### Day-1 quickstart (ingest + review)
+
+```bash
+pip install -e .
+python -m opportunity_ingest run --csv path/or/download-sample
+python -m opportunity_ingest run --write --max-create 10
+python -m opportunity_ingest export-csv
+```
+
+For live dry-run without a local CSV, use `python -m opportunity_ingest run` (downloads the open-tender feed). Prefer `download-sample` or a fixture path for offline smoke tests.
+
+**Operators:** full Status triage, `MAX_CREATE` policy, calibration, amendment caveat, keyword ownership, Teams/streak alerts, cache re-runs, SharePoint flip, and rollback → **[scripts/ops_runbook.md](scripts/ops_runbook.md)**.
+
 ### Storage backend
 
 | Variable | Default | Description |
@@ -107,11 +120,17 @@ Set under **Settings → Secrets and variables → Actions → Variables**.
 src/opportunity_ingest/   # installable package (src layout)
 tests/                    # pytest
 config/                   # keywords + settings examples
+scripts/                  # ops runbook + SharePoint provisioning docs
 data/                     # local SQLite + exports (gitignored contents)
 state/                    # streak state (gitignored JSON)
 logs/                     # run logs (gitignored)
 .github/workflows/        # ci.yml + daily-canadabuys-ingest.yml
 ```
+
+## Ops
+
+- **[scripts/ops_runbook.md](scripts/ops_runbook.md)** — daily Status triage (export-csv / SQL), amendment caveat, calibration, `MAX_CREATE` policy, keyword issues → eng, zero-new streak / Teams, cache `run_attempt`, SharePoint activation, rollback.
+- **[scripts/provision_sharepoint_list.md](scripts/provision_sharepoint_list.md)** — when flipping `STORAGE_BACKEND=sharepoint` (not required for day-1 sqlite).
 
 ## Design
 
