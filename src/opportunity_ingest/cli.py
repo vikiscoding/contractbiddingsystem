@@ -12,22 +12,21 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
+from opportunity_ingest.config import Settings, get_settings
 from opportunity_ingest.download import DEFAULT_SAMPLE_PATH, DownloadError, download_to_path
+from opportunity_ingest.exit_codes import EXIT_USAGE
 from opportunity_ingest.logging_setup import setup_logging
-
-
-def _cmd_not_implemented(name: str) -> int:
-    print(
-        f"Command '{name}' is not implemented yet (scaffold only).",
-        file=sys.stderr,
-    )
-    return 1
+from opportunity_ingest.pipeline import resolve_write_mode, run_pipeline
+from opportunity_ingest.storage.base import StoreError
+from opportunity_ingest.storage.factory import build_store
+from opportunity_ingest.storage.sqlite_store import SqliteOpportunityStore
 
 
 def _usage_error(message: str) -> int:
     print(f"error: {message}", file=sys.stderr)
-    return 2
+    return EXIT_USAGE
 
 
 def cmd_download_sample(out_path: str | None) -> int:
@@ -39,6 +38,123 @@ def cmd_download_sample(out_path: str | None) -> int:
         print(f"error: download failed: {exc}", file=sys.stderr)
         return 1
     print(f"Wrote {path}")
+    return 0
+
+
+def cmd_run(
+    args: argparse.Namespace,
+    settings: Settings | None = None,
+) -> int:
+    """Run the full ingest pipeline (dry-run default; ``--write`` persists)."""
+    settings = settings or get_settings()
+    setup_logging(settings.log_level)
+
+    write = resolve_write_mode(
+        write_flag=bool(args.write),
+        dry_run_flag=bool(args.dry_run),
+        dry_run_env=bool(settings.dry_run),
+    )
+    # --with-existing is dry-run only (validated in main before call).
+    with_existing = bool(args.with_existing) and not write
+
+    max_create = args.max_create
+    if max_create is None:
+        max_create = settings.max_create
+
+    metrics = run_pipeline(
+        settings,
+        write=write,
+        csv_path=args.csv_path,
+        max_create=max_create,
+        with_existing=with_existing,
+    )
+
+    mode = "write" if write else "dry-run"
+    print(
+        f"[{mode}] parsed={metrics.parsed_count} filtered={metrics.filtered_count} "
+        f"mapped={metrics.mapped_count} "
+        f"added={metrics.added_count} would_create={metrics.would_create_count} "
+        f"errors={metrics.error_count} skipped_dup={metrics.skipped_duplicate_count} "
+        f"skipped_max={metrics.skipped_max_create_count} "
+        f"streak={metrics.consecutive_zero_new_days} "
+        f"exit={metrics.exit_code} notified={metrics.notified}"
+    )
+    if metrics.hard_fail and metrics.hard_fail_reason:
+        print(f"error: {metrics.hard_fail_reason}", file=sys.stderr)
+    return int(metrics.exit_code)
+
+
+def cmd_check_store(settings: Settings | None = None) -> int:
+    """Health-check backend + sample key load (backend-neutral)."""
+    settings = settings or get_settings()
+    setup_logging(settings.log_level)
+    try:
+        store = build_store(settings)
+    except (ValueError, NotImplementedError) as exc:
+        print(f"error: store config: {exc}", file=sys.stderr)
+        return 1
+    try:
+        store.health_check()
+        keys = store.load_existing_keys()
+    except StoreError as exc:
+        print(f"error: store health check failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"ok backend={store.name} "
+        f"opportunity_ids={len(keys.opportunity_ids)} "
+        f"links={len(keys.links)}"
+    )
+    return 0
+
+
+def cmd_export_csv(
+    out_path: str | None,
+    settings: Settings | None = None,
+) -> int:
+    """Dump opportunities to CSV for human review (primary path: sqlite).
+
+    SharePoint export is not supported in this release; use STORAGE_BACKEND=sqlite
+    or query Graph separately when activated.
+    """
+    settings = settings or get_settings()
+    setup_logging(settings.log_level)
+
+    backend = (settings.storage_backend or "sqlite").strip().lower()
+    if backend != "sqlite":
+        print(
+            f"error: export-csv is supported for STORAGE_BACKEND=sqlite only "
+            f"(current={backend!r}). SharePoint export is not implemented; "
+            f"export from sqlite or use Graph tooling when SP is activated.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        store = build_store(settings)
+    except (ValueError, NotImplementedError) as exc:
+        print(f"error: store config: {exc}", file=sys.stderr)
+        return 1
+
+    if not isinstance(store, SqliteOpportunityStore):
+        print(
+            "error: export-csv requires SqliteOpportunityStore",
+            file=sys.stderr,
+        )
+        return 1
+
+    out = Path(out_path) if out_path else settings.data_dir / "export-opportunities.csv"
+    try:
+        store.health_check()
+        count = store.export_csv(out)
+    except StoreError as exc:
+        print(f"error: export failed: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: cannot write CSV {out}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Wrote {count} rows to {out}")
     return 0
 
 
@@ -115,13 +231,13 @@ def main(argv: list[str] | None = None) -> int:
         # N >= 1 = attempt budget; 0 = unlimited; negatives are invalid.
         if args.max_create is not None and args.max_create < 0:
             return _usage_error("--max-create must be >= 0 (0=unlimited)")
-        return _cmd_not_implemented("run")
+        return cmd_run(args)
     if args.command == "download-sample":
         return cmd_download_sample(args.out_path)
     if args.command == "check-store":
-        return _cmd_not_implemented("check-store")
+        return cmd_check_store()
     if args.command == "export-csv":
-        return _cmd_not_implemented("export-csv")
+        return cmd_export_csv(args.out_path)
 
     raise AssertionError(f"unhandled command: {args.command!r}")
 

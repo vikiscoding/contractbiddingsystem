@@ -39,18 +39,6 @@ def test_cli_help_exits_cleanly():
         raise AssertionError("expected SystemExit from --help")
 
 
-def test_cli_run_stub_returns_not_implemented():
-    code = main(["run", "--dry-run"])
-    assert code == 1
-
-
-def test_cli_remaining_subcommands_stub_return_1():
-    # download-sample is implemented in this PR; others remain stubs.
-    assert main(["run"]) == 1
-    assert main(["check-store"]) == 1
-    assert main(["export-csv"]) == 1
-
-
 def test_write_and_dry_run_are_mutually_exclusive():
     with pytest.raises(SystemExit) as exc_info:
         main(["run", "--write", "--dry-run"])
@@ -79,7 +67,7 @@ def test_max_create_negative_rejected():
     assert code == 2
 
 
-def test_max_create_zero_allowed_as_unlimited_stub():
-    # 0 = unlimited per design; stub still returns not-implemented.
-    code = main(["run", "--max-create", "0"])
-    assert code == 1
+def test_max_create_zero_parses_as_unlimited():
+    # 0 = unlimited per design; full pipeline needs --csv offline (see test_cli_dry_run).
+    args = build_parser().parse_args(["run", "--max-create", "0", "--csv", "x.csv"])
+    assert args.max_create == 0

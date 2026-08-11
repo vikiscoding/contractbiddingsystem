@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from opportunity_ingest.models import ExistingKeys, OpportunityFields
 from opportunity_ingest.storage.base import (
@@ -217,3 +219,49 @@ class SqliteOpportunityStore:
                 f"SQLite create returned no row id for OpportunityID={opportunity_id!r}"
             )
         return str(row_id)
+
+    # Logical schema columns exported for human review (stable order).
+    EXPORT_COLUMNS: tuple[str, ...] = (
+        "id",
+        "Title",
+        "OpportunityID",
+        "Source",
+        "Buyer",
+        "Link",
+        "PublishedDate",
+        "ClosingDate",
+        "Category",
+        "Description",
+        "KeywordsMatched",
+        "RelevanceScore",
+        "Status",
+        "DateAdded",
+        "Notes",
+        "created_at_utc",
+    )
+
+    def list_rows(self) -> list[dict[str, Any]]:
+        """Return all opportunity rows as dicts (logical schema + id)."""
+        self.ensure_schema()
+        cols = ", ".join(self.EXPORT_COLUMNS)
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"SELECT {cols} FROM contract_opportunities "
+                    "ORDER BY RelevanceScore DESC, id ASC"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise StoreError(f"SQLite list_rows failed at {self.path}: {exc}") from exc
+        return [dict(row) for row in rows]
+
+    def export_csv(self, path: str | Path) -> int:
+        """Write all opportunities to CSV for human review. Returns row count."""
+        out = Path(path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        rows = self.list_rows()
+        with out.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(self.EXPORT_COLUMNS))
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k) for k in self.EXPORT_COLUMNS})
+        return len(rows)

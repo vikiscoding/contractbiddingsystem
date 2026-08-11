@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     zero_new_streak_threshold: int = Field(default=3)
     partial_error_exit_threshold: int = Field(default=5)
     teams_webhook_url: str | None = Field(default=None)
+    github_run_url: str | None = Field(
+        default=None,
+        description="GitHub Actions run URL for Teams cards (GITHUB_RUN_URL)",
+    )
 
     # SharePoint / Graph — optional until STORAGE_BACKEND=sharepoint
     azure_tenant_id: str | None = Field(default=None)

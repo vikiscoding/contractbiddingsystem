@@ -43,12 +43,10 @@ python -m opportunity_ingest check-store
 python -m opportunity_ingest export-csv [--out PATH]
 ```
 
-Scaffold status: subcommands are declared; full pipeline logic lands in later PRs. Stubs currently exit with a clear “not implemented” message.
-
-- **`run`** — dry-run by default (no writes). Use `--write` to persist.
+- **`run`** — dry-run by default (no writes). Use `--write` to persist to the configured store.
 - **`download-sample`** — fetch a sample open-tender CSV.
-- **`check-store`** — health-check the configured backend.
-- **`export-csv`** — export stored opportunities for human review (SQL / CSV / Excel).
+- **`check-store`** — health-check the configured backend + sample key load.
+- **`export-csv`** — export stored opportunities for human review (sqlite primary; SharePoint not supported yet).
 
 ## Development
 
