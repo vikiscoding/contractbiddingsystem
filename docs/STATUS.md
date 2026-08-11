@@ -7,8 +7,10 @@ Living snapshot of implementation and ops readiness.
 |-------|--------|
 | **Last updated** | 2026-08-10 |
 | **Phase** | Phase 1 — CanadaBuys open tender ingest |
-| **Overall status** | **Implemented & manually validated (local)** |
-| **Recommended next** | Push to GitHub → configure Actions secrets/vars → enable schedule |
+| **Overall status** | **Implemented & manually validated (local); code on GitHub** |
+| **GitHub** | https://github.com/vikiscoding/contractbiddingsystem (**private**) |
+| **Default branch** | `main` |
+| **Recommended next** | Configure Actions secrets/vars → `workflow_dispatch` smoke → enable schedule |
 
 ---
 
@@ -86,8 +88,8 @@ Create-only ingest; never silent-truncate Link; Sheets is not SoR.
 
 ## 6. Go-live checklist (GitHub Actions)
 
-- [ ] Code on default branch (`main`) of GitHub remote  
-- [ ] CI green on push  
+- [x] Code on default branch (`main`) of GitHub remote (`vikiscoding/contractbiddingsystem`)  
+- [ ] CI green on push (watch **Actions** tab after first push)  
 - [ ] Repo variable `INGEST_MAX_CREATE=50` (or desired)  
 - [ ] Secret `TEAMS_WEBHOOK_URL` (recommended)  
 - [ ] Optional Sheets: secrets `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON` + workflow step  
