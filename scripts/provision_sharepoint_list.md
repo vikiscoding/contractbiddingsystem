@@ -6,6 +6,8 @@ The SharePoint Graph adapter is already implemented (`SharePointOpportunityStore
 
 Dual-write (SQLite + SharePoint) is **not** Phase 1. Switch backends; migrate data out-of-band if needed.
 
+**Single-writer assumption:** Unlike SQLite, SharePoint has no UNIQUE index on OpportunityID/Link. The adapter pre-checks via `load_existing_keys` but does **not** raise `SkipDuplicate` on create. Avoid parallel `STORAGE_BACKEND=sharepoint --write` jobs (one schedule, concurrency group). Optional later hardening: Power Automate / list validation rules.
+
 ---
 
 ## 1. Create the list (UI is source of truth)
@@ -19,10 +21,10 @@ Use these **display names** (internal names should match when created without sp
 | Column | Type | Required | Notes |
 |--------|------|----------|-------|
 | **Title** | Single line of text | Yes | Built-in; max 255 |
-| **OpportunityID** | Single line of text | Yes | Unique business key (enforce via process / Power Automate if desired; Graph has no UNIQUE index) |
+| **OpportunityID** | Single line of text | Yes | Business key for dedupe; **no Graph UNIQUE index** — process-level uniqueness only (single writer + optional Power Automate) |
 | **Source** | Choice or single line | Yes | Default / value `CanadaBuys` |
 | **Buyer** | Single line of text | No | |
-| **Link** | **Multiple lines of text** (plain text) | Yes | **Not** Hyperlink column — full notice URL, never truncated |
+| **Link** | **Multiple lines of text — plain text (not enhanced/rich text)** | Yes | **Not** Hyperlink; **not** rich text (rich text returns HTML and breaks URL dedupe) |
 | **PublishedDate** | Date only | No | |
 | **ClosingDate** | Date and time | No | Store/display UTC-aware values from pipeline |
 | **Category** | Single line of text | No | GSIN or procurement category |
@@ -35,7 +37,14 @@ Use these **display names** (internal names should match when created without sp
 
 ### Why multi-line plain text for Link?
 
-Graph Hyperlink columns are awkward (object shape `{Url, Description}`, length quirks). Phase 1 stores the full CanadaBuys notice URL as a **plain string** in a multi-line text column. The adapter also **reads** legacy Hyperlink objects (`{Url: ...}`) if an old column type remains.
+Graph Hyperlink columns are awkward (object shape `{Url, Description}`, length quirks). Phase 1 stores the full CanadaBuys notice URL as a **plain string** in a multi-line text column.
+
+When creating the column in SharePoint UI:
+
+1. Type: **Multiple lines of text**
+2. Specify the type of text: **Plain text** (not “Enhanced rich text”)
+
+Enhanced/rich text stores HTML (`<div>`, `<a href=...>`) which breaks plain-string dedupe and human copy/paste. The adapter also **reads** legacy Hyperlink objects (`{Url: ...}`) if an old column type remains.
 
 ---
 
@@ -80,7 +89,7 @@ In the JSON `value` array, find `displayName == "Contract Opportunities"` (or yo
 
 ### PowerShell / Graph Explorer
 
-Use [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer) signed in as a site owner, or any script with an app token that already has site access (after step 4 grant).
+Use [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer) signed in as a **SharePoint Administrator** (or Global Admin) for grant operations, or any script with an app token that already has site access (after step 4 grant).
 
 ---
 
@@ -108,10 +117,12 @@ Use [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer)
 
 The ingest app cannot grant itself site access. A **privileged caller** must POST a site permission that names the ingest app and role **`write`** (or `read` if you only smoke-test reads first; pipeline creates need **`write`**).
 
+This API creates **application** site permissions only. For **delegated** calls (Graph Explorer), Microsoft Graph requires a directory administrator role such as **SharePoint Administrator or Global Administrator** — **site collection admin alone is not sufficient** and typically returns HTTP 403.
+
 ### Option A — Graph Explorer (interactive admin)
 
-1. Sign in to Graph Explorer as a **SharePoint admin / Global admin** (or a user with sufficient site collection admin rights for the grant API).
-2. Consent to **`Sites.FullControl.All`** (or the grant permission your tenant uses) for Graph Explorer **as the signed-in user**.
+1. Sign in to Graph Explorer as a **SharePoint Administrator** or **Global Administrator** (not merely site collection admin).
+2. Consent to delegated **`Sites.FullControl.All`** for Graph Explorer **as the signed-in user** (admin consent as required by your tenant).
 3. POST:
 
 ```http
@@ -137,12 +148,72 @@ Content-Type: application/json
 GET https://graph.microsoft.com/v1.0/sites/{site-id}/permissions
 ```
 
-### Option B — Temporary privileged app
+### Option B — Temporary privileged app (application permissions)
 
-1. Create a **short-lived** admin app with application permission **`Sites.FullControl.All`** + admin consent.
-2. Client-credentials token for that admin app.
-3. Same POST `/sites/{site-id}/permissions` as above, targeting the **ingest** app’s client id.
-4. **Remove** `Sites.FullControl.All` / delete the admin app secret when done.
+1. Create a **short-lived** admin app registration with application permission **`Sites.FullControl.All`** + **admin consent**.
+2. Acquire a client-credentials token for that admin app (scope `https://graph.microsoft.com/.default`), then POST the same permission body targeting the **ingest** app’s client id.
+3. **Remove** `Sites.FullControl.All` / delete the admin app secret when done.
+
+Example (PowerShell-friendly sketch; replace placeholders):
+
+```powershell
+# --- Admin app (Sites.FullControl.All) token ---
+$tenantId  = "{ADMIN_OR_SAME_TENANT_ID}"
+$adminAppId = "{ADMIN_APP_CLIENT_ID}"
+$adminSecret = "{ADMIN_APP_CLIENT_SECRET}"
+$siteId = "{SHAREPOINT_SITE_ID}"
+$ingestAppId = "{AZURE_CLIENT_ID}"   # the Sites.Selected ingest app
+
+$tokenBody = @{
+  client_id     = $adminAppId
+  client_secret = $adminSecret
+  scope         = "https://graph.microsoft.com/.default"
+  grant_type    = "client_credentials"
+}
+$token = Invoke-RestMethod `
+  -Method POST `
+  -Uri "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" `
+  -Body $tokenBody
+
+$headers = @{
+  Authorization  = "Bearer $($token.access_token)"
+  "Content-Type" = "application/json"
+}
+$grantBody = @{
+  roles = @("write")
+  grantedToIdentities = @(
+    @{
+      application = @{
+        id          = $ingestAppId
+        displayName = "opportunity-ingest-graph"
+      }
+    }
+  )
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Method POST `
+  -Uri "https://graph.microsoft.com/v1.0/sites/$siteId/permissions" `
+  -Headers $headers `
+  -Body $grantBody
+```
+
+Or with curl:
+
+```bash
+# 1) Token
+curl -s -X POST "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token" \
+  -d "client_id={admin_app_id}" \
+  -d "client_secret={admin_secret}" \
+  -d "scope=https://graph.microsoft.com/.default" \
+  -d "grant_type=client_credentials"
+
+# 2) Grant (use access_token from step 1)
+curl -s -X POST "https://graph.microsoft.com/v1.0/sites/{site-id}/permissions" \
+  -H "Authorization: Bearer {admin_access_token}" \
+  -H "Content-Type: application/json" \
+  -d '{"roles":["write"],"grantedToIdentities":[{"application":{"id":"{ingest_client_id}","displayName":"opportunity-ingest-graph"}}]}'
+```
 
 ### Verify app-only access
 
@@ -153,7 +224,7 @@ GET https://graph.microsoft.com/v1.0/sites/{site-id}/lists/{list-id}?$select=id,
 Authorization: Bearer {ingest-app-token}
 ```
 
-Expect HTTP 200. HTTP 403 → grant missing or wrong site id.
+Expect HTTP 200. HTTP 403 → grant missing, wrong site id, or **propagation delay** (wait a few minutes and retry).
 
 Token scope for the ingest app:
 
@@ -219,6 +290,7 @@ store = build_store(get_settings())
 store.health_check()
 keys = store.load_existing_keys()
 print(store.name, len(keys.opportunity_ids), len(keys.links))
+store.close()  # optional; owned httpx client
 ```
 
 ---
@@ -233,31 +305,30 @@ from opportunity_ingest.config import get_settings
 from opportunity_ingest.models import OpportunityFields
 from opportunity_ingest.storage import build_store
 
-store = build_store(get_settings())
-store.health_check()
-
-item_id = store.create(
-    OpportunityFields(
-        Title="SP smoke test",
-        OpportunityID="SMOKE-SP-001",
-        Source="CanadaBuys",
-        Buyer="Test",
-        Link="https://canadabuys.canada.ca/en/tender-opportunities/notice/smoke-sp-001",
-        PublishedDate=None,
-        ClosingDate=None,
-        Category=None,
-        Description="provisioning smoke",
-        KeywordsMatched="",
-        RelevanceScore=0,
-        Status="New",
-        DateAdded=datetime.now(timezone.utc),
-        Notes="",
+with build_store(get_settings()) as store:
+    store.health_check()
+    item_id = store.create(
+        OpportunityFields(
+            Title="SP smoke test",
+            OpportunityID="SMOKE-SP-001",
+            Source="CanadaBuys",
+            Buyer="Test",
+            Link="https://canadabuys.canada.ca/en/tender-opportunities/notice/smoke-sp-001",
+            PublishedDate=None,
+            ClosingDate=None,
+            Category=None,
+            Description="provisioning smoke",
+            KeywordsMatched="",
+            RelevanceScore=0,
+            Status="New",
+            DateAdded=datetime.now(timezone.utc),
+            Notes="",
+        )
     )
-)
-print("created", item_id)
+    print("created", item_id)
 ```
 
-Confirm in the SharePoint UI: Link is the full URL text, Status = New, DateAdded set.
+Confirm in the SharePoint UI: Link is the full URL **plain text** (no HTML wrapper), Status = New, DateAdded set.
 
 Delete the smoke row from the UI if you do not want it in production data.
 
@@ -268,8 +339,9 @@ Delete the smoke row from the UI if you do not want it in production data.
 1. Optional: export SQLite → CSV (`export-csv`) for backup / migration reference.
 2. Optional one-time migration: import CSV into the list (manual or scripted creates). **Not** automatic dual-write in Phase 1.
 3. Set `STORAGE_BACKEND=sharepoint` + secrets in the environment / Actions.
-4. Run `check-store` and a controlled `--write` with low `MAX_CREATE` / `INGEST_MAX_CREATE`.
-5. Monitor Teams failure notifications and Graph 403/429 rates.
+4. Ensure only **one** scheduled writer (Actions concurrency group); do not run parallel sharepoint `--write` jobs.
+5. Run `check-store` and a controlled `--write` with low `MAX_CREATE` / `INGEST_MAX_CREATE`.
+6. Monitor Teams failure notifications and Graph 403/429 rates.
 
 ---
 
@@ -278,11 +350,16 @@ Delete the smoke row from the UI if you do not want it in production data.
 | Symptom | Likely cause |
 |---------|----------------|
 | MSAL `invalid_client` / secret errors | Wrong tenant/client/secret; secret expired |
-| HTTP 403 on list GET | Site permission grant missing; wrong `SHAREPOINT_SITE_ID` |
+| HTTP 403 on list GET (immediate after grant) | **Permission propagation delay** — wait 2–10 minutes and retry; then check grant / site id |
+| HTTP 403 on list GET (persists) | Site permission grant missing; wrong `SHAREPOINT_SITE_ID`; delegated grant done as non-admin |
+| HTTP 403 on `POST .../permissions` (Option A) | Caller is not SharePoint Admin / Global Admin; site collection admin is insufficient |
 | HTTP 404 on list | Wrong `SHAREPOINT_LIST_ID` or site |
 | Create 400 on field name | Column internal name mismatch — check list columns in Graph `columns` API |
-| Create 400 on Link object | Link must be multi-line **text**, not Hyperlink |
+| Create 400 on Link object | Link must be multi-line **plain text**, not Hyperlink |
+| Link values contain `<div>` / `<a` / HTML | Column is **enhanced rich text** — recreate as multi-line **plain text** |
+| Duplicate OpportunityID / Link rows | Concurrent sharepoint writers **or** no SP unique index — Phase 1: single schedule only; optional Power Automate later |
 | Empty dedupe keys | List empty or `$expand=fields` column names differ from OpportunityID/Link |
+| HTTP 429 during key load | Graph throttling — adapter retries a few times with `Retry-After`; reduce parallel jobs |
 
 Inspect columns:
 
@@ -296,5 +373,6 @@ GET https://graph.microsoft.com/v1.0/sites/{site-id}/lists/{list-id}/columns?$se
 
 - [List items — Microsoft Graph](https://learn.microsoft.com/en-us/graph/api/listitem-list?view=graph-rest-1.0)
 - [Create list item](https://learn.microsoft.com/en-us/graph/api/listitem-create?view=graph-rest-1.0)
+- [Create site permission](https://learn.microsoft.com/en-us/graph/api/site-post-permissions?view=graph-rest-1.0)
 - [Sites.Selected overview](https://learn.microsoft.com/en-us/graph/permissions-reference#sitesselected)
 - Design: `docs/phase1-canadabuys-sharepoint-implementation-schema.md`

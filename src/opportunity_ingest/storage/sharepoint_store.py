@@ -2,14 +2,20 @@
 
 Activated when ``STORAGE_BACKEND=sharepoint``. Not required for day-1 (SQLite default).
 Graph list create uses a multi-line plain-text ``Link`` column (string URL, never Hyperlink).
+
+Phase 1 limitations (see also ``scripts/provision_sharepoint_list.md``):
+- SharePoint lists have no UNIQUE index; this adapter does not raise ``SkipDuplicate``.
+  Rely on single-writer schedule + ``load_existing_keys`` pre-check; concurrent
+  ``--write`` runs can insert duplicate OpportunityID/Link rows.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import msal
@@ -24,6 +30,9 @@ UTC = timezone.utc
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
 PAGE_SIZE = 100
+# Limited Graph throttle retries (429). 5xx is not retried here (fail fast for Actions).
+MAX_THROTTLE_RETRIES = 3
+DEFAULT_RETRY_AFTER_SECONDS = 1.0
 
 
 def _fmt_date(value: date | None) -> str | None:
@@ -45,8 +54,8 @@ def _fmt_datetime_utc(value: datetime | None) -> str | None:
 def extract_link_url(raw: object) -> str:
     """Normalize Graph Link field value to a URL string.
 
-    SharePoint multi-line text returns a plain ``str``. A legacy Hyperlink column
-    may return ``{"Url": "...", "Description": "..."}``.
+    SharePoint multi-line plain text returns a plain ``str``. A legacy Hyperlink
+    column may return ``{"Url": "...", "Description": "..."}``.
     """
     if raw is None:
         return ""
@@ -94,8 +103,24 @@ def fields_to_graph_payload(fields: OpportunityFields) -> dict[str, Any]:
     return payload
 
 
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """Parse Retry-After (seconds or HTTP-date is not supported — seconds only)."""
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return DEFAULT_RETRY_AFTER_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return DEFAULT_RETRY_AFTER_SECONDS
+
+
 class SharePointOpportunityStore:
-    """Microsoft Graph SharePoint list backend for Contract Opportunities."""
+    """Microsoft Graph SharePoint list backend for Contract Opportunities.
+
+    Owns an ``httpx.Client`` when constructed without ``http_client``; call
+    :meth:`close` or use as a context manager to release connections. Injected
+    clients are never closed by this store (caller-owned).
+    """
 
     name: str = "sharepoint"
 
@@ -135,7 +160,18 @@ class SharePointOpportunityStore:
         self._owns_client = http_client is None
         self._token_provider = token_provider
         self._msal_app: msal.ConfidentialClientApplication | None = None
-        self._cached_token: str | None = None
+
+    def close(self) -> None:
+        """Close the owned httpx client, if any. Safe to call multiple times."""
+        if self._owns_client and self._http_client is not None:
+            self._http_client.close()
+            self._http_client = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # --- auth -----------------------------------------------------------------
 
@@ -150,7 +186,12 @@ class SharePointOpportunityStore:
         return self._msal_app
 
     def _acquire_token(self) -> str:
-        """Client credentials → ``https://graph.microsoft.com/.default``."""
+        """Client credentials → ``https://graph.microsoft.com/.default``.
+
+        No process-level token cache: MSAL's ``ConfidentialClientApplication``
+        already caches tokens until expiry. Custom ``token_provider`` is invoked
+        on every request (tests inject a stable or sequenced provider).
+        """
         if self._token_provider is not None:
             token = self._token_provider()
             if not token:
@@ -163,14 +204,6 @@ class SharePointOpportunityStore:
             raise StoreError(f"MSAL client-credentials token failed: {err or result!r}")
         return str(result["access_token"])
 
-    def _token(self) -> str:
-        if self._cached_token is None:
-            self._cached_token = self._acquire_token()
-        return self._cached_token
-
-    def _invalidate_token(self) -> None:
-        self._cached_token = None
-
     # --- http -----------------------------------------------------------------
 
     def _client(self) -> httpx.Client:
@@ -179,6 +212,7 @@ class SharePointOpportunityStore:
                 timeout=self.timeout,
                 follow_redirects=True,
             )
+            self._owns_client = True
         return self._http_client
 
     def _items_url(self) -> str:
@@ -187,12 +221,14 @@ class SharePointOpportunityStore:
     def _list_url(self) -> str:
         return f"{GRAPH_BASE}/sites/{self.site_id}/lists/{self.list_id}"
 
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._token()}",
+    def _headers(self, *, with_content_type: bool) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self._acquire_token()}",
             "Accept": "application/json",
-            "Content-Type": "application/json",
         }
+        if with_content_type:
+            headers["Content-Type"] = "application/json"
+        return headers
 
     def _request(
         self,
@@ -202,23 +238,44 @@ class SharePointOpportunityStore:
         json_body: dict[str, Any] | None = None,
         retry_auth: bool = True,
     ) -> httpx.Response:
-        """Perform a Graph request; refresh token once on 401."""
+        """Perform a Graph request; refresh token once on 401; limited 429 retries."""
         client = self._client()
-        try:
-            response = client.request(
-                method,
-                url,
-                headers=self._headers(),
-                json=json_body,
-            )
-        except httpx.HTTPError as exc:
-            raise StoreError(f"Graph request failed ({method} {url}): {exc}") from exc
+        throttle_attempt = 0
+        while True:
+            try:
+                response = client.request(
+                    method,
+                    url,
+                    headers=self._headers(with_content_type=json_body is not None),
+                    json=json_body,
+                )
+            except httpx.HTTPError as exc:
+                raise StoreError(f"Graph request failed ({method} {url}): {exc}") from exc
 
-        if response.status_code == 401 and retry_auth:
-            self._invalidate_token()
-            return self._request(method, url, json_body=json_body, retry_auth=False)
+            if response.status_code == 401 and retry_auth:
+                # MSAL will refresh if needed on next acquire; token_provider is re-invoked.
+                return self._request(
+                    method, url, json_body=json_body, retry_auth=False
+                )
 
-        return response
+            if (
+                response.status_code == 429
+                and throttle_attempt < MAX_THROTTLE_RETRIES
+            ):
+                wait = _retry_after_seconds(response)
+                logger.warning(
+                    "Graph 429 on %s %s; retry %s/%s after %.1fs",
+                    method,
+                    url,
+                    throttle_attempt + 1,
+                    MAX_THROTTLE_RETRIES,
+                    wait,
+                )
+                time.sleep(wait)
+                throttle_attempt += 1
+                continue
+
+            return response
 
     def _raise_for_status(self, response: httpx.Response, action: str) -> None:
         if response.is_success:
@@ -237,10 +294,8 @@ class SharePointOpportunityStore:
 
     def health_check(self) -> None:
         """Acquire a token and confirm list access (GET list metadata)."""
-        # Force a fresh token attempt so bad credentials fail loudly.
-        self._invalidate_token()
         try:
-            _ = self._token()
+            _ = self._acquire_token()
         except StoreError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
@@ -295,8 +350,11 @@ class SharePointOpportunityStore:
     def create(self, fields: OpportunityFields) -> str:
         """POST one list item (create-only). Return Graph list item id as str.
 
-        ``Link`` is sent as a plain-text string URL. ``Status`` is ``New`` unless
-        already set. ``DateAdded`` is ISO UTC.
+        ``Link`` is sent as a plain-text string URL. ``Status`` defaults to
+        ``New``; ``DateAdded`` is ISO UTC (via ``fields_to_graph_payload``).
+
+        Does **not** raise ``SkipDuplicate``: SharePoint has no unique constraint
+        on OpportunityID/Link (Phase 1 single-writer assumption).
         """
         opportunity_id = str(fields.OpportunityID or "").strip()
         title = str(fields.Title or "").strip()
@@ -314,11 +372,6 @@ class SharePointOpportunityStore:
             )
 
         body = {"fields": fields_to_graph_payload(fields)}
-        # Ensure required create defaults after mapping.
-        body["fields"]["Status"] = fields.Status or "New"
-        if not body["fields"].get("DateAdded"):
-            body["fields"]["DateAdded"] = _fmt_datetime_utc(datetime.now(UTC))
-
         response = self._request("POST", self._items_url(), json_body=body)
         if not response.is_success:
             self._raise_for_status(

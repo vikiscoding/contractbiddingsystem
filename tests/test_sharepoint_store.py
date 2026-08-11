@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
@@ -146,6 +147,7 @@ def test_health_check_token_and_list_access(token_provider: Any):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer test-access-token"
         assert request.method == "GET"
+        assert "Content-Type" not in request.headers
         assert str(request.url).startswith(GRAPH_LIST)
         return _json_response(200, {"id": LIST, "displayName": "Contract Opportunities"})
 
@@ -155,6 +157,7 @@ def test_health_check_token_and_list_access(token_provider: Any):
         _settings(), http_client=client, token_provider=token_provider
     )
     store.health_check()
+    # health_check acquires token once, then GET (second acquire for headers).
     assert len(transport.requests) == 1
 
 
@@ -247,16 +250,13 @@ def test_create_posts_plain_text_link_and_returns_id(token_provider: Any):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert str(request.url).startswith(GRAPH_ITEMS)
-        body = request.read()
-        import json
-
-        data = json.loads(body)
+        assert request.headers.get("Content-Type", "").startswith("application/json")
+        data = json.loads(request.read())
         fields = data["fields"]
         assert fields["Link"] == (
             "https://canadabuys.canada.ca/en/tender-opportunities/notice/pw-2026-001"
         )
         assert isinstance(fields["Link"], str)
-        assert "Url" not in fields["Link"] if isinstance(fields["Link"], dict) else True
         assert fields["Status"] == "New"
         assert fields["DateAdded"] == "2026-08-10T15:30:00Z"
         assert fields["OpportunityID"] == "PW-2026-001"
@@ -348,8 +348,10 @@ def test_token_via_msal_client_credentials(monkeypatch: pytest.MonkeyPatch):
     )
     store.health_check()
     mock_cls.assert_called_once()
-    kwargs = mock_cls.call_args
-    assert kwargs[0][0] == "client-1" or kwargs.args[0] == "client-1"
+    args, kwargs = mock_cls.call_args
+    assert args[0] == "client-1"
+    assert kwargs.get("authority") == "https://login.microsoftonline.com/tenant-1"
+    assert kwargs.get("client_credential") == "secret-1"
     mock_app.acquire_token_for_client.assert_called_with(
         scopes=["https://graph.microsoft.com/.default"]
     )
@@ -389,13 +391,73 @@ def test_create_retries_auth_on_401(token_provider: Any):
         }
         return _json_response(201, {"id": "7", "fields": body_fields})
 
-    # token_provider is used each acquire; invalidate clears cache so second call gets next.
+    # token_provider is invoked per request; 401 triggers a single retry acquire.
     store = SharePointOpportunityStore(
         _settings(),
         http_client=httpx.Client(transport=FakeTransport(handler)),
         token_provider=provider,
     )
-    # First token cached as stale; 401 invalidates; second acquire returns fresh.
     item_id = store.create(_fields())
     assert item_id == "7"
     assert calls == ["Bearer stale-token", "Bearer fresh-token"]
+
+
+def test_request_retries_on_429(token_provider: Any, monkeypatch: pytest.MonkeyPatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "opportunity_ingest.storage.sharepoint_store.time.sleep",
+        lambda s: sleeps.append(s),
+    )
+    n = {"i": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        n["i"] += 1
+        if n["i"] == 1:
+            return httpx.Response(
+                status_code=429,
+                headers={"Retry-After": "0"},
+                text="throttled",
+                request=request,
+            )
+        return _json_response(200, {"id": LIST, "displayName": "Contract Opportunities"})
+
+    store = SharePointOpportunityStore(
+        _settings(),
+        http_client=httpx.Client(transport=FakeTransport(handler)),
+        token_provider=token_provider,
+    )
+    store.health_check()
+    assert n["i"] == 2
+    assert sleeps == [0.0]
+
+
+def test_close_owned_client(token_provider: Any):
+    store = SharePointOpportunityStore(_settings(), token_provider=token_provider)
+    # Force lazy client creation.
+    client = store._client()
+    assert store._owns_client is True
+    close_mock = MagicMock(wraps=client.close)
+    client.close = close_mock  # type: ignore[method-assign]
+    store.close()
+    close_mock.assert_called_once()
+    store.close()  # idempotent; no second close on None client
+
+
+def test_context_manager_closes_owned_client(token_provider: Any):
+    with SharePointOpportunityStore(_settings(), token_provider=token_provider) as store:
+        store._client()
+        assert store._http_client is not None
+    assert store._http_client is None
+
+
+def test_injected_client_not_closed_by_store(token_provider: Any):
+    transport = FakeTransport(lambda r: _json_response(200, {"value": []}))
+    client = httpx.Client(transport=transport)
+    store = SharePointOpportunityStore(
+        _settings(), http_client=client, token_provider=token_provider
+    )
+    store.load_existing_keys()
+    store.close()
+    # Injected client remains usable.
+    assert not client.is_closed
+    client.close()
