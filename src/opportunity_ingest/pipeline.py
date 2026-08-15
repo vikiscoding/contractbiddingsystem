@@ -28,9 +28,9 @@ from opportunity_ingest.filter_keywords import (
 from opportunity_ingest.map_fields import MapError, map_to_opportunity_fields
 from opportunity_ingest.models import ExistingKeys, OpportunityFields
 from opportunity_ingest.notify import (
+    dispatch_match_notifications,
     match_items_from_opportunity_fields,
     notify_ingest_alert,
-    notify_match_alerts,
 )
 from opportunity_ingest.parse import ParseError, parse_csv_file, parse_csv_text
 from opportunity_ingest.score import compute_score
@@ -83,6 +83,7 @@ class RunMetrics:
     notify_reason: str | None = None
     match_notified: bool = False
     match_notify_count: int = 0
+    slack_match_notified: bool = False
     csv_source: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -465,28 +466,38 @@ def run_pipeline(
                 extra_facts=extra,
             )
 
-        # High-match capture pings (new creates only; dry-run never posts).
-        if write and created_fields and settings.teams_match_notify_enabled:
+        # High-match capture pings → Teams and/or Slack (new creates only).
+        if write and created_fields and (
+            settings.teams_match_notify_enabled or settings.slack_match_notify_enabled
+        ):
             thr = int(settings.teams_match_score_threshold)
             match_items = match_items_from_opportunity_fields(
                 created_fields, threshold=thr
             )
             metrics.match_notify_count = len(match_items)
             if match_items:
-                metrics.match_notified = notify_match_alerts(
-                    settings.resolved_match_webhook_url(),
+                dispatched = dispatch_match_notifications(
                     match_items,
                     threshold=thr,
                     source="ingest",
                     run_url=settings.github_run_url,
+                    sheets_url=settings.resolved_google_sheet_url(),
+                    sheets_tab=settings.google_sheet_tab or "Ingest",
                     max_items=int(settings.teams_match_max_items),
-                    enabled=True,
+                    teams_webhook_url=settings.resolved_match_webhook_url(),
+                    teams_enabled=bool(settings.teams_match_notify_enabled),
+                    slack_bot_token=settings.resolved_slack_bot_token(),
+                    slack_channel_id=settings.resolved_slack_channel_id(),
+                    slack_webhook_url=settings.resolved_slack_match_webhook_url(),
+                    slack_enabled=bool(settings.slack_match_notify_enabled),
                 )
+                metrics.match_notified = dispatched.teams_posted
+                metrics.slack_match_notified = dispatched.slack_posted
 
         logger.info(
             "Run complete: write=%s added=%s errors=%s would_create=%s "
             "skipped_dup=%s skipped_max=%s exit=%s notified=%s "
-            "match_notified=%s match_count=%s",
+            "match_notified=%s slack_match_notified=%s match_count=%s",
             write,
             metrics.added_count,
             metrics.error_count,
@@ -496,6 +507,7 @@ def run_pipeline(
             metrics.exit_code,
             metrics.notified,
             metrics.match_notified,
+            metrics.slack_match_notified,
             metrics.match_notify_count,
         )
 

@@ -85,11 +85,41 @@ class Settings(BaseSettings):
     )
     teams_match_max_items: int = Field(
         default=8,
-        description="Max opportunities listed on one match Adaptive Card",
+        description="Max opportunities listed on one match Adaptive Card / Slack msg",
+    )
+    # Slack CLI / Bolt credentials (preferred for match pings)
+    # https://docs.slack.dev/tools/slack-cli/ — paste tokens from CLI-created app
+    slack_bot_token: str | None = Field(
+        default=None,
+        description="Bot User OAuth Token xoxb-... (Slack CLI / Bolt SLACK_BOT_TOKEN)",
+    )
+    slack_app_token: str | None = Field(
+        default=None,
+        description=(
+            "App-level token xapp-... (SLACK_APP_TOKEN; Socket Mode / slack run). "
+            "Not required for outbound chat.postMessage match alerts."
+        ),
+    )
+    slack_channel_id: str | None = Field(
+        default=None,
+        description="Channel ID C... or #name for match posts (chat.postMessage)",
+    )
+    # Legacy Incoming Webhooks (fallback if bot token unset)
+    slack_webhook_url: str | None = Field(
+        default=None,
+        description="Legacy Incoming Webhook URL (prefer SLACK_BOT_TOKEN)",
+    )
+    slack_match_webhook_url: str | None = Field(
+        default=None,
+        description="Legacy dedicated match webhook; falls back to SLACK_WEBHOOK_URL",
+    )
+    slack_match_notify_enabled: bool = Field(
+        default=True,
+        description="Post Slack message when new matches meet score threshold",
     )
     notify_config_path: Path = Field(
         default=Path("config/notify.yaml"),
-        description="Optional YAML for Teams match notify defaults",
+        description="Optional YAML for Teams/Slack match notify defaults",
     )
     github_run_url: str | None = Field(
         default=None,
@@ -107,6 +137,13 @@ class Settings(BaseSettings):
     google_sheet_id: str | None = Field(
         default=None,
         description="Spreadsheet ID from the sheet URL",
+    )
+    google_sheet_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional full spreadsheet share/deep link for Teams/Slack cards; "
+            "when unset, built from GOOGLE_SHEET_ID"
+        ),
     )
     google_sheet_tab: str = Field(
         default="Ingest",
@@ -163,15 +200,53 @@ class Settings(BaseSettings):
         return self.data_dir / "contract_opportunities.db"
 
     def resolved_match_webhook_url(self) -> str | None:
-        """Webhook for high-match pings (dedicated URL or ops fallback)."""
+        """Teams webhook for high-match pings (dedicated URL or ops fallback)."""
         for raw in (self.teams_match_webhook_url, self.teams_webhook_url):
             if raw and str(raw).strip():
                 return str(raw).strip()
         return None
 
+    def resolved_google_sheet_url(self) -> str | None:
+        """Browser URL for the opportunity spreadsheet (match-card CTA).
+
+        Uses ``GOOGLE_SHEET_URL`` when set; otherwise
+        ``https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit``.
+        """
+        if self.google_sheet_url and str(self.google_sheet_url).strip():
+            u = str(self.google_sheet_url).strip()
+            if u.startswith(("http://", "https://")):
+                return u
+        sid = (self.google_sheet_id or "").strip()
+        if not sid:
+            return None
+        return f"https://docs.google.com/spreadsheets/d/{sid}/edit"
+
+    def resolved_slack_match_webhook_url(self) -> str | None:
+        """Legacy Incoming Webhook for match pings (if bot token path unused)."""
+        for raw in (self.slack_match_webhook_url, self.slack_webhook_url):
+            if raw and str(raw).strip():
+                return str(raw).strip()
+        return None
+
+    def resolved_slack_bot_token(self) -> str | None:
+        """Bot token for Web API (Slack CLI / Bolt ``SLACK_BOT_TOKEN``)."""
+        if self.slack_bot_token and str(self.slack_bot_token).strip():
+            return str(self.slack_bot_token).strip()
+        return None
+
+    def resolved_slack_channel_id(self) -> str | None:
+        """Target channel for ``chat.postMessage``."""
+        if self.slack_channel_id and str(self.slack_channel_id).strip():
+            return str(self.slack_channel_id).strip()
+        return None
+
+    def slack_web_api_configured(self) -> bool:
+        """True when Slack CLI-style bot token + channel are both set."""
+        return bool(self.resolved_slack_bot_token() and self.resolved_slack_channel_id())
+
 
 def load_notify_yaml_overrides(path: Path | str | None = None) -> dict[str, object]:
-    """Load optional config/notify.yaml teams section (soft; empty if missing)."""
+    """Load optional config/notify.yaml teams/slack sections (soft; empty if missing)."""
     import yaml
 
     p = Path(path) if path is not None else Path("config/notify.yaml")
@@ -183,29 +258,37 @@ def load_notify_yaml_overrides(path: Path | str | None = None) -> dict[str, obje
         return {}
     if not isinstance(raw, dict):
         return {}
-    teams = raw.get("teams")
-    if not isinstance(teams, dict):
-        return {}
     out: dict[str, object] = {}
+
+    # Shared threshold / max items (root or teams — teams keeps back-compat)
+    shared = raw.get("match") if isinstance(raw.get("match"), dict) else {}
+    teams = raw.get("teams") if isinstance(raw.get("teams"), dict) else {}
+    slack = raw.get("slack") if isinstance(raw.get("slack"), dict) else {}
+
+    thr = shared.get("score_threshold", teams.get("match_score_threshold"))
+    if thr is not None:
+        try:
+            out["teams_match_score_threshold"] = int(thr)
+        except (TypeError, ValueError):
+            pass
+    max_items = shared.get("max_items_per_message", teams.get("max_items_per_message"))
+    if max_items is not None:
+        try:
+            out["teams_match_max_items"] = int(max_items)
+        except (TypeError, ValueError):
+            pass
+
     if "match_notify_enabled" in teams:
         out["teams_match_notify_enabled"] = bool(teams["match_notify_enabled"])
-    if "match_score_threshold" in teams:
-        try:
-            out["teams_match_score_threshold"] = int(teams["match_score_threshold"])
-        except (TypeError, ValueError):
-            pass
-    if "max_items_per_message" in teams:
-        try:
-            out["teams_match_max_items"] = int(teams["max_items_per_message"])
-        except (TypeError, ValueError):
-            pass
+    if "match_notify_enabled" in slack:
+        out["slack_match_notify_enabled"] = bool(slack["match_notify_enabled"])
     return out
 
 
 def get_settings() -> Settings:
     """Load settings from environment / ``.env``, with soft notify.yaml overrides.
 
-    Env vars always win for secrets and when ``TEAMS_MATCH_*`` is set.
+    Env vars always win for secrets and when ``TEAMS_MATCH_*`` / ``SLACK_*`` is set.
     ``config/notify.yaml`` fills threshold/enabled/max items when those env
     keys are unset.
     """
@@ -221,6 +304,7 @@ def get_settings() -> Settings:
         "teams_match_notify_enabled": "TEAMS_MATCH_NOTIFY_ENABLED",
         "teams_match_score_threshold": "TEAMS_MATCH_SCORE_THRESHOLD",
         "teams_match_max_items": "TEAMS_MATCH_MAX_ITEMS",
+        "slack_match_notify_enabled": "SLACK_MATCH_NOTIFY_ENABLED",
     }
     for field_name, env_name in env_map.items():
         if env_name not in os.environ and field_name in yaml_over:

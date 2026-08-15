@@ -33,7 +33,10 @@ from opportunity_ingest.interpret_rank import (
     run_interpret_rank,
 )
 from opportunity_ingest.logging_setup import setup_logging
-from opportunity_ingest.notify import match_items_from_ranked, notify_match_alerts
+from opportunity_ingest.notify import (
+    dispatch_match_notifications,
+    match_items_from_ranked,
+)
 from opportunity_ingest.pipeline import resolve_write_mode, run_pipeline
 from opportunity_ingest.sheets_sync import (
     DEFAULT_RANK_TAB,
@@ -113,6 +116,7 @@ def cmd_run(
         f"streak={metrics.consecutive_zero_new_days} "
         f"exit={metrics.exit_code} notified={metrics.notified} "
         f"match_notified={metrics.match_notified} "
+        f"slack_match_notified={metrics.slack_match_notified} "
         f"match_count={metrics.match_notify_count}"
     )
     if metrics.hard_fail and metrics.hard_fail_reason:
@@ -418,23 +422,35 @@ def cmd_interpret_rank(
             return EXIT_FAILURE
         print(f"Synced {count} ranking rows to sheet {sid} tab {tab!r}")
 
-    # Teams capture ping for Grok fits at/above threshold (default 40).
-    skip_teams = bool(getattr(args, "no_teams", False))
-    if settings.teams_match_notify_enabled and not skip_teams:
+    # Teams + Slack capture pings for Grok fits at/above threshold (default 40).
+    skip_chat = bool(getattr(args, "no_teams", False))
+    if (
+        not skip_chat
+        and (
+            settings.teams_match_notify_enabled or settings.slack_match_notify_enabled
+        )
+    ):
         thr = int(settings.teams_match_score_threshold)
         match_items = match_items_from_ranked(result.ranked, threshold=thr)
-        posted = notify_match_alerts(
-            settings.resolved_match_webhook_url(),
+        dispatched = dispatch_match_notifications(
             match_items,
             threshold=thr,
             source="interpret-rank",
             run_url=settings.github_run_url,
+            sheets_url=settings.resolved_google_sheet_url(),
+            sheets_tab=settings.google_sheet_rank_tab or "Ranked",
             max_items=int(settings.teams_match_max_items),
-            enabled=True,
+            teams_webhook_url=settings.resolved_match_webhook_url(),
+            teams_enabled=bool(settings.teams_match_notify_enabled),
+            slack_bot_token=settings.resolved_slack_bot_token(),
+            slack_channel_id=settings.resolved_slack_channel_id(),
+            slack_webhook_url=settings.resolved_slack_match_webhook_url(),
+            slack_enabled=bool(settings.slack_match_notify_enabled),
         )
         print(
-            f"teams match_notify posted={posted} "
-            f"above_threshold={len(match_items)} threshold={thr}"
+            f"match_notify teams={dispatched.teams_posted} "
+            f"slack={dispatched.slack_posted} "
+            f"above_threshold={dispatched.match_count} threshold={thr}"
         )
     return 0
 

@@ -8,9 +8,9 @@ Living snapshot of implementation and ops readiness.
 | **Last updated** | 2026-08-11 |
 | **Phase** | Phase 1 ingest + optional Grok interpret-rank (post-ingest) |
 | **Overall status** | **Ingest implemented & locally validated; Grok/Ranked coded + unit-tested; live Grok E2E pending** |
-| **GitHub** | https://github.com/vikiscoding/contractbiddingsystem (**private**) |
+| **GitHub** | Private repository (see `git remote -v`) |
 | **Default branch** | `main` |
-| **Recommended next** | **Human plug-in:** [`PLUG_AND_PLAY.md`](PLUG_AND_PLAY.md) — Teams webhook, Actions secrets, confirm daily path. Eng roadmap: [`BACKLOG.md`](BACKLOG.md) |
+| **Recommended next** | **Human plug-in:** [`PLUG_AND_PLAY.md`](PLUG_AND_PLAY.md). Eng roadmap: [`BACKLOG.md`](BACKLOG.md). Long-horizon multi-geo vision: BACKLOG **§7**. |
 
 ---
 
@@ -29,7 +29,8 @@ Living snapshot of implementation and ops readiness.
 | Re-push rankings without Grok | **Implemented** | `sync-rank-sheets` from latest `data/rankings/interpret-*.json` |
 | SharePoint Graph adapter | **Implemented, not activated** | Needs Entra + Sites.Selected grant |
 | Teams Workflows ops notify | **Code ready** | hard fail / partial / streak → `TEAMS_WEBHOOK_URL` |
-| Teams high-match capture ping | **Implemented** | score ≥40 (config); Adaptive Card + OpenUrl CTA; `config/notify.yaml` |
+| Teams high-match capture ping | **Implemented** | score ≥40; Adaptive Card + OpenUrl CTA; `config/notify.yaml` |
+| Slack high-match capture ping | **Implemented** | ≥40; Slack CLI `SLACK_BOT_TOKEN` + channel via `chat.postMessage`; webhook legacy fallback |
 | GitHub Actions CI (`ci.yml`) | **In repo** | ruff + pytest |
 | GitHub Actions daily ingest | **In repo, not yet scheduled live** | Needs vars/secrets; enable after calibration |
 | Source/website-type keyword packs | **Not built** | Tracked: [`BACKLOG.md`](BACKLOG.md) B-01, B-02 |
@@ -115,7 +116,7 @@ Create-only ingest; never silent-truncate Link; Sheets is not SoR; Grok never re
 
 ## 6. Go-live checklist (GitHub Actions)
 
-- [x] Code on default branch (`main`) of GitHub remote (`vikiscoding/contractbiddingsystem`)  
+- [x] Code on default branch (`main`) of the GitHub remote  
 - [ ] CI green on push (watch **Actions** tab after first push)  
 - [ ] Repo variable `INGEST_MAX_CREATE=50` (or desired)  
 - [ ] Secret `TEAMS_WEBHOOK_URL` (recommended)  
@@ -133,6 +134,7 @@ Create-only ingest; never silent-truncate Link; Sheets is not SoR; Grok never re
 | Need | Doc |
 |------|-----|
 | **Human keys + plug-and-play + function list + roadmap** | [`PLUG_AND_PLAY.md`](PLUG_AND_PLAY.md) |
+| **Processor role, triggers, outputs** | [`PROCESSOR_OVERVIEW.md`](PROCESSOR_OVERVIEW.md) |
 | LLM / agent context | [`../AGENTS.md`](../AGENTS.md) |
 | Architecture (what exists) | [`AS_BUILT.md`](AS_BUILT.md) |
 | **Discussed / not built** | [`BACKLOG.md`](BACKLOG.md) |

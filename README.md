@@ -9,6 +9,7 @@ Phase 1 pipeline: download CanadaBuys **Open Tender Notices** CSV, filter by key
 | **Optional view** | Google Sheets tab full-replace (`sync-sheets`) |
 | **LLM / agent entry** | **[`AGENTS.md`](AGENTS.md)** ← start here for AI-assisted development |
 | **Human plug-in** | **[`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md)** ← keys, steps, roadmap to go live |
+| **Processor overview** | **[`docs/PROCESSOR_OVERVIEW.md`](docs/PROCESSOR_OVERVIEW.md)** ← role, triggers, I/O in the wider system |
 
 ---
 
@@ -16,6 +17,7 @@ Phase 1 pipeline: download CanadaBuys **Open Tender Notices** CSV, filter by key
 
 | Doc | Audience | Purpose |
 |-----|----------|---------|
+| [`docs/PROCESSOR_OVERVIEW.md`](docs/PROCESSOR_OVERVIEW.md) | **Everyone** | This app as **one key processor** — role, triggers, outputs |
 | [`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md) | **Operators / humans** | **Keys to plug, function list, go-live sequence, roadmap** |
 | [`AGENTS.md`](AGENTS.md) | LLMs + devs | Hard rules, module map, task routing |
 | [`docs/STATUS.md`](docs/STATUS.md) | Everyone | Living readiness / what works now |
@@ -49,7 +51,7 @@ If design doc and as-built conflict → **prefer code + AS_BUILT + DATA_UPDATE_D
 → **[`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md)**
 
 ```powershell
-cd "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
+cd <repository-root>
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
@@ -93,7 +95,7 @@ python -m opportunity_ingest interpret-rank --status New --limit 20
 # Re-push last report without Grok: python -m opportunity_ingest sync-rank-sheets
 ```
 
-**Notes learned in setup:**
+**Setup notes:**
 
 - `pip install -e .` needs the trailing `.`
 - CanadaBuys may return **403** without a browser User-Agent (handled in `download.py`)

@@ -2,10 +2,11 @@
 
 **Audience:** operators and humans who will turn on what engineering already built.  
 **As-of:** 2026-08-11  
-**Code status:** features below are **implemented**; they stay idle until you plug secrets/config.
+**Code status:** features below are **implemented**; they stay idle until secrets and configuration are provided.
 
 | Related docs | |
 |--------------|--|
+| **What this processor is** | [`PROCESSOR_OVERVIEW.md`](PROCESSOR_OVERVIEW.md) |
 | What works now | [`STATUS.md`](STATUS.md) |
 | Architecture | [`AS_BUILT.md`](AS_BUILT.md) |
 | Future / not built | [`BACKLOG.md`](BACKLOG.md) · roadmap § below |
@@ -76,7 +77,9 @@ Copy `.env.example` → **repo-root** `.env` (never `scripts/.env`). Never commi
 | 5 | `XAI_API_KEY` | [console.x.ai](https://console.x.ai) API keys | `interpret-rank` |
 | 6 | `TEAMS_WEBHOOK_URL` | Teams channel → Workflows → “Post when webhook received” | Ops alerts + match fallback |
 | 7 | `TEAMS_MATCH_WEBHOOK_URL` *(optional)* | Second Workflows webhook | Dedicated capture channel |
-| 8 | `TEAMS_MATCH_SCORE_THRESHOLD` | Default **40** via env or `config/notify.yaml` | When to ping |
+| 8 | `TEAMS_MATCH_SCORE_THRESHOLD` | Default **40** via env or `config/notify.yaml` | When to ping (Teams **and** Slack) |
+| 8b | `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID` | Slack CLI / Bolt app (`xoxb-` + channel) | High-match Slack posts (preferred) |
+| 8c | `SLACK_APP_TOKEN` | Optional `xapp-` for Socket Mode only | Not required for match posts |
 | 9 | Azure / SharePoint secrets | Only if `STORAGE_BACKEND=sharepoint` | Alternate store (not required day-1) |
 | 10 | GitHub Actions secrets/vars | Repo Settings → Secrets | Unattended daily schedule |
 
@@ -118,7 +121,23 @@ TEAMS_MATCH_NOTIFY_ENABLED=true
 TEAMS_MATCH_SCORE_THRESHOLD=40
 ```
 
-Detailed Sheets steps: [`../scripts/google_sheets_setup.md`](../scripts/google_sheets_setup.md).
+**E — + Slack via Slack CLI / Bolt tokens (same match criteria as Teams)**
+
+```env
+# https://docs.slack.dev/tools/slack-cli/ — full steps: scripts/slack_cli_setup.md
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_CHANNEL_ID=C...
+# SLACK_APP_TOKEN=xapp-...   # optional; slack run Socket Mode only
+SLACK_MATCH_NOTIFY_ENABLED=true
+TEAMS_MATCH_SCORE_THRESHOLD=40
+```
+
+```powershell
+pip install -e ".[slack]"
+```
+
+Detailed Sheets steps: [`../scripts/google_sheets_setup.md`](../scripts/google_sheets_setup.md).  
+Slack CLI paste-config: [`../scripts/slack_cli_setup.md`](../scripts/slack_cli_setup.md).
 
 ---
 
@@ -193,13 +212,25 @@ python -m opportunity_ingest interpret-rank --status New --limit 27
 
 Skip sheet: `--no-sync-sheets`. Skip Teams: `--no-teams`.
 
-### Step 4 — Teams channel pings (human actions)
+### Step 4 — Teams and/or Slack capture pings (human actions)
 
-1. In the target **Teams channel** (or chat via Workflows that posts there):  
-   **Workflows** → template *Post to a channel when a webhook request is received* → copy URL.  
-2. Set `TEAMS_WEBHOOK_URL` (and optionally `TEAMS_MATCH_WEBHOOK_URL` for a capture-only channel).  
-3. Confirm `config/notify.yaml` or env: threshold **40**, `match_notify_enabled: true`.  
-4. Trigger:
+**Teams**
+
+1. **Workflows** → *Post to a channel when a webhook request is received* → copy URL.  
+2. Set `TEAMS_WEBHOOK_URL` (and optionally `TEAMS_MATCH_WEBHOOK_URL`).  
+
+**Slack (CLI / Bolt config)**
+
+1. Install [Slack CLI](https://docs.slack.dev/tools/slack-cli/), run `slack login`, create/install an app with **`chat:write`**.  
+2. Paste **Bot User OAuth Token** → `SLACK_BOT_TOKEN=xoxb-...`  
+3. Set **channel** → `SLACK_CHANNEL_ID=C...` (invite bot to channel).  
+4. `pip install -e ".[slack]"` — see [`../scripts/slack_cli_setup.md`](../scripts/slack_cli_setup.md). 
+
+**Shared criteria**
+
+3. Threshold **40** (`TEAMS_MATCH_SCORE_THRESHOLD` or `config/notify.yaml` → `match.score_threshold`).  
+4. Enable flags: `TEAMS_MATCH_NOTIFY_ENABLED` / `SLACK_MATCH_NOTIFY_ENABLED` (default true).  
+5. Trigger:
 
 ```powershell
 # New high rule-score creates:
@@ -209,9 +240,8 @@ python -m opportunity_ingest run --write --max-create 10
 python -m opportunity_ingest interpret-rank --limit 27
 ```
 
-**You should see:** Adaptive Card in the channel with summaries + **Open notice** buttons.
-
-Ops-only alerts (hard fail / zero-new streak) also use `TEAMS_WEBHOOK_URL` without needing a separate match URL.
+**You should see:** Teams Adaptive Card and/or Slack Block Kit message with summaries + open-notice buttons.  
+Ops alerts (hard fail / streak) remain **Teams-only** today (`TEAMS_WEBHOOK_URL`).
 
 ### Step 5 — Daily automation (pick one)
 
@@ -252,7 +282,7 @@ Workflow file: [`.github/workflows/daily-canadabuys-ingest.yml`](../.github/work
 
 ---
 
-## 6. End-to-end “happy path” (everything on)
+## 6. End-to-end verification (all integrations enabled)
 
 After Steps 0–4:
 
@@ -282,8 +312,9 @@ python -m opportunity_ingest interpret-rank --status New --limit 50
 | Sheets **Ingest** | Yes | SA + sheet share + ID | Yes (local) |
 | Grok **interpret-rank** | Yes | `XAI_API_KEY` | Yes (local) |
 | Sheets **Ranked** | Yes | same Sheets as Ingest | Yes (local) |
-| Teams ops alerts | Yes | `TEAMS_WEBHOOK_URL` | Code ready; needs your webhook |
-| Teams match ≥40 | Yes | webhook + threshold | Code ready; needs your webhook |
+| Teams ops alerts | Yes | `TEAMS_WEBHOOK_URL` | Code ready; requires a configured webhook |
+| Teams match ≥40 | Yes | webhook + threshold | Code ready; requires a configured webhook |
+| Slack match ≥40 | Yes | `SLACK_WEBHOOK_URL` + same threshold | Code ready; requires a configured webhook |
 | GitHub daily schedule | Yes | repo secrets + enable schedule | Not fully go-live |
 | SharePoint SoR | Yes | Entra + Sites.Selected | Not activated |
 | Type-based keyword packs / auto crawl | No | — | See roadmap |
@@ -302,14 +333,16 @@ Full detail: [`BACKLOG.md`](BACKLOG.md). Summary for humans:
 | Near | B-01 / B-02 | Source-type classifier + keyword packs | Product priority |
 | Later | B-03 | Grok suggest-keywords (PR only) | Design sign-off |
 | Later | B-04 / B-05 | Company-site crawl / notice page crawl | Product + ToS |
-| Deferred | N-* | Multi-source SoR, auto-bid, two-way Status, dual-write | Phase non-goals |
+| Long horizon | V-1…V-10 | Multi-geography **lawful** source mesh + self-sustaining loop | [`BACKLOG.md`](BACKLOG.md) **§7** |
+| Deferred | N-* | Unrestricted web scrape, auto-bid, dual-write, two-way Status | Project guardrails |
 
 **Suggested human order after keys work:**
 
-1. Plug Teams webhook → prove one match card.  
+1. Plug Slack/Teams → prove one match card.  
 2. Enable Actions schedule with small `INGEST_MAX_CREATE`.  
 3. Weekly: review Ranked + Status triage.  
-4. Eng: tune keywords/objectives from real false positives.
+4. Eng: tune keywords/objectives from real false positives.  
+5. Only then: discuss §7 second source / geography pack.
 
 ---
 
@@ -327,11 +360,11 @@ Full detail: [`BACKLOG.md`](BACKLOG.md). Summary for humans:
 
 ---
 
-## 10. One-page “who does what”
+## 10. Roles and responsibilities
 
 | Role | Does |
 |------|------|
-| **Human (you)** | Keys, sheet share, Teams Workflow, Status triage, bid/no-bid |
+| **Operators** | Keys, sheet share, Teams Workflow, Status triage, bid/no-bid |
 | **Engineering** | keywords.yaml, objectives.yaml, code, tests, Actions YAML |
 | **System (already built)** | Download, filter, score, store, export, Sheets replace, Grok rank, Teams cards |
 

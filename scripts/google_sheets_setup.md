@@ -26,7 +26,7 @@ Use a separate tab (e.g. **Review**) for manual notes so they are not wiped.
 - Python package extras for Sheets:
 
 ```powershell
-cd "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
+cd <repository-root>
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[sheets]"
 ```
@@ -199,25 +199,16 @@ python -m opportunity_ingest sync-rank-sheets
 
 ## Part E — Daily automatic update
 
-### Option 1 — Windows Task Scheduler (your PC)
+### Option 1 — Windows Task Scheduler (operator workstation)
 
-1. Create `scripts\daily_sync.ps1`:
-
-```powershell
-Set-Location "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
-& .\.venv\Scripts\Activate.ps1
-python -m opportunity_ingest run --write --max-create 50
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-python -m opportunity_ingest sync-sheets
-exit $LASTEXITCODE
-```
+1. Use the checked-in script `scripts\daily_sync.ps1` (it changes to the repository root from its own location).
 
 2. Task Scheduler → **Create Basic Task** → Daily after ~9:30 AM Eastern  
    (CanadaBuys refreshes earlier; 10:00 AM local is a safe start).
 3. Action: start program  
    `powershell.exe`  
    Arguments:  
-   `-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem\scripts\daily_sync.ps1"`
+   `-NoProfile -ExecutionPolicy Bypass -File "<repository-root>\scripts\daily_sync.ps1"`
 
 PC must be on at that time.
 

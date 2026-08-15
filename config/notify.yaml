@@ -1,34 +1,35 @@
-# Teams / notification pipeline config (engineering-owned).
+# Notification pipeline config (engineering-owned).
 # Loaded by opportunity_ingest when present; env vars override (see Settings).
 #
-# Ops alerts (hard fail / partial errors / zero-new streak) still use
-# TEAMS_WEBHOOK_URL via notify_ingest_alert.
+# Ops alerts (hard fail / partial / zero-new streak): TEAMS_WEBHOOK_URL only today.
 #
-# Match alerts: when NEW opportunities clear the score bar, post a channel
-# Adaptive Card with summary + Open notice CTA links.
+# Match alerts (score ≥ threshold): Teams Adaptive Card and/or Slack Block Kit.
+#   Ingest write path → rule RelevanceScore
+#   interpret-rank     → Grok fit_score
+#   When GOOGLE_SHEET_ID (or GOOGLE_SHEET_URL) is set, cards include Open Google Sheet.
+#
+# Slack preferred auth = Slack CLI / Bolt tokens (not Incoming Webhooks):
+#   https://docs.slack.dev/tools/slack-cli/
+#   SLACK_BOT_TOKEN=xoxb-...   (required for chat.postMessage)
+#   SLACK_CHANNEL_ID=C...      (or #channel-name)
+#   SLACK_APP_TOKEN=xapp-...   (optional; used by `slack run` Socket Mode only)
 version: 1
 
-teams:
-  # Master switch for match pings (ops alerts still follow TEAMS_WEBHOOK_URL).
-  match_notify_enabled: true
-
-  # Score threshold 0–100 (40 = "above 40% match" on our 0–100 scales).
-  # - ingest write path: rule RelevanceScore
-  # - interpret-rank path: Grok fit_score
-  match_score_threshold: 40
-
-  # Prefer TEAMS_MATCH_WEBHOOK_URL env for a dedicated capture channel;
-  # if unset, falls back to TEAMS_WEBHOOK_URL (same Workflows connector).
-  # use_ops_webhook_fallback: true  # always true in code when match URL empty
-
-  # Cap how many opportunities appear in one Teams card (rest summarized).
+match:
+  score_threshold: 40
   max_items_per_message: 8
 
-  # Truncate free-text fields for Adaptive Card readability.
+teams:
+  match_notify_enabled: true
+  match_score_threshold: 40
+  max_items_per_message: 8
   title_max_chars: 120
   summary_max_chars: 280
-
-  # Card branding
   card_title_ingest: "New opportunity matches (≥ threshold)"
   card_title_rank: "Grok fit matches (≥ threshold)"
   cta_label: "Open notice"
+
+slack:
+  match_notify_enabled: true
+  # Prefer Web API (bot token). Legacy webhook only if SLACK_BOT_TOKEN unset.
+  # mode: web_api | webhook   # informational; code auto-selects

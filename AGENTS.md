@@ -37,6 +37,7 @@ Daily (or on-demand) pipeline:
 | 1 | **This file (`AGENTS.md`)** | Non-negotiable rules + orientation |
 | 2 | [`docs/STATUS.md`](docs/STATUS.md) | Living readiness snapshot (what works / next) |
 | 3 | [`docs/PLUG_AND_PLAY.md`](docs/PLUG_AND_PLAY.md) | Human keys + plug-and-play steps for built features |
+| 3b | [`docs/PROCESSOR_OVERVIEW.md`](docs/PROCESSOR_OVERVIEW.md) | Plain language: this app as one processor — triggers, I/O, system place |
 | 4 | [`docs/DATA_UPDATE_DIRECTIVES.md`](docs/DATA_UPDATE_DIRECTIVES.md) | **MUST / MUST NOT** for data writes, schema, sync |
 | 5 | [`docs/AS_BUILT.md`](docs/AS_BUILT.md) | Current architecture, modules, CLI, env |
 | 6 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Roadmap / discussed but **not built** |
@@ -80,7 +81,7 @@ src/opportunity_ingest/
   models.py           # TenderRecord, OpportunityFields, ExistingKeys
   config.py           # pydantic-settings
   state.py            # zero-new streak JSON
-  notify.py           # Teams ops alerts + high-match capture cards (CTA links)
+  notify.py           # Teams + Slack match pings (score≥threshold); Teams ops alerts
   exit_codes.py       # exit + notify matrix
   sheets_sync.py      # SQLite → Google Sheets full tab replace
   interpret_rank.py   # Grok rephrase + fit rank (report only)

@@ -1,6 +1,6 @@
 # Engineering-owned keyword config for CanadaBuys open-tender filtering.
-# Tuned for Atlas Flow Group capabilities (site crawl 2026-08-11):
-#   https://atlasflowgroupwebsite.vikrant-singh1.workers.dev/
+# Tuned for Atlas Flow Group capabilities (public site review 2026-08-11):
+#   https://www.atlasflowgroup.com/
 # Ops request changes via GitHub issues; eng reviews/merges.
 #
 # Atlas Flow Group is NOT a classic MSP / ServiceNow SI / construction vendor.

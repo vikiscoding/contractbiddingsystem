@@ -32,6 +32,9 @@ sheets = [
 ai = [
     "openai>=1.40",
 ]
+slack = [
+    "slack-sdk>=3.27",
+]
 
 [project.scripts]
 opportunity-ingest = "opportunity_ingest.cli:main"

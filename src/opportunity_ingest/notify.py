@@ -1,26 +1,30 @@
-"""Teams Workflows webhook notifications (Adaptive Card).
+"""Channel notifications: Teams Workflows + Slack Incoming Webhooks.
 
-Two pipelines share this module:
+Pipelines:
 
-1. **Ops alerts** — hard fail, partial errors, zero-new streak
+1. **Ops alerts (Teams)** — hard fail, partial errors, zero-new streak
    (``notify_ingest_alert`` / ``TEAMS_WEBHOOK_URL``).
 2. **Match alerts** — new opportunities or Grok ranks at/above score threshold
-   (``notify_match_alerts`` / ``TEAMS_MATCH_WEBHOOK_URL`` or ops fallback).
-   Call-to-action cards include truncated summaries + OpenUrl actions.
+   (default **40/100**):
+   - Teams Adaptive Card: ``notify_match_alerts`` / ``TEAMS_MATCH_WEBHOOK_URL``
+   - Slack (preferred): **Slack CLI / Bolt config** — ``SLACK_BOT_TOKEN`` (``xoxb-``)
+     + ``SLACK_CHANNEL_ID`` via Web API ``chat.postMessage`` (Block Kit).
+     Optional ``SLACK_APP_TOKEN`` (``xapp-``) is documented for CLI/Bolt apps but
+     not required for outbound posts.
+   - Slack (legacy fallback): Incoming Webhook URL if bot token unset.
+   - Multi-channel: ``dispatch_match_notifications``
+   - Optional Google Sheets link (``GOOGLE_SHEET_ID`` / ``GOOGLE_SHEET_URL``)
+     as fact + OpenUrl / button on the card.
 
-On successful ops notify POST, sets GitHub Actions step output ``notified=true``
-so the workflow backup step can skip double-notify
+Match cards include truncated summaries + open-notice CTAs (buttons / OpenUrl).
+
+On successful **Teams ops** notify POST, sets GitHub Actions step output
+``notified=true`` so the workflow backup step can skip double-notify
 (``failure() && steps.ingest.outputs.notified != 'true'``).
 
-**GITHUB_OUTPUT ownership (KD-18):** When ``GITHUB_OUTPUT`` is set, notify
+**GITHUB_OUTPUT ownership (KD-18):** When ``GITHUB_OUTPUT`` is set, ops notify
 ownership is complete only if that file is written after a successful webhook
-POST. Write is retried once; persistent failure logs at ERROR and returns
-``False`` (does not claim ``notified=true``). In that edge case Actions may
-still double-notify on job failure — operators should treat GITHUB_OUTPUT I/O
-errors as critical. When ``GITHUB_OUTPUT`` is unset (local runs), POST success
-alone is enough.
-
-Match alerts do **not** set ``notified=true`` (ops ownership handoff only).
+POST. Match alerts (Teams or Slack) do **not** set ``notified=true``.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
@@ -41,15 +45,17 @@ DEFAULT_MATCH_THRESHOLD = 40
 DEFAULT_MATCH_MAX_ITEMS = 8
 DEFAULT_TITLE_MAX = 120
 DEFAULT_SUMMARY_MAX = 280
+# Slack allows many blocks but keep action buttons modest.
+SLACK_MAX_ACTION_BUTTONS = 5
 
 
 class NotifyError(Exception):
-    """Teams webhook or GITHUB_OUTPUT handoff failure (non-fatal to exit matrix)."""
+    """Webhook or GITHUB_OUTPUT handoff failure (non-fatal to exit matrix)."""
 
 
 @dataclass(frozen=True, slots=True)
 class MatchAlertItem:
-    """One high-match opportunity for a Teams capture ping."""
+    """One high-match opportunity for capture-channel pings (Teams and/or Slack)."""
 
     title: str
     opportunity_id: str
@@ -61,6 +67,17 @@ class MatchAlertItem:
     summary: str | None = None
     recommendation: str | None = None
     closing_date: str | None = None
+
+
+@dataclass(slots=True)
+class MatchNotifyResult:
+    """Outcome of multi-channel match dispatch."""
+
+    match_count: int = 0
+    teams_posted: bool = False
+    slack_posted: bool = False
+    any_posted: bool = False
+    details: dict[str, str] = field(default_factory=dict)
 
 
 def set_github_output_notified(notified: bool = True) -> bool:
@@ -173,21 +190,46 @@ def filter_match_items(
     return filtered
 
 
+def google_sheet_edit_url(
+    spreadsheet_id: str | None,
+    *,
+    override_url: str | None = None,
+) -> str | None:
+    """Build a browser URL for the workbook (Teams/Slack CTA).
+
+    Prefer ``override_url`` when set (full share/deep link). Otherwise
+    ``https://docs.google.com/spreadsheets/d/{id}/edit`` from the sheet id.
+    """
+    if override_url and str(override_url).strip():
+        u = str(override_url).strip()
+        if u.startswith(("http://", "https://")):
+            return u
+    sid = (spreadsheet_id or "").strip()
+    if not sid:
+        return None
+    return f"https://docs.google.com/spreadsheets/d/{sid}/edit"
+
+
 def build_match_alert_payload(
     items: Sequence[MatchAlertItem],
     *,
     threshold: int = DEFAULT_MATCH_THRESHOLD,
     source: str = "ingest",
     run_url: str | None = None,
+    sheets_url: str | None = None,
+    sheets_tab: str | None = None,
     max_items: int = DEFAULT_MATCH_MAX_ITEMS,
     title_max_chars: int = DEFAULT_TITLE_MAX,
     summary_max_chars: int = DEFAULT_SUMMARY_MAX,
     card_title: str | None = None,
     cta_label: str = "Open notice",
+    sheets_cta_label: str = "Open Google Sheet",
 ) -> dict[str, Any]:
     """Adaptive Card: high-match opportunities with summary + OpenUrl CTAs.
 
     ``source`` is ``ingest`` (rule score) or ``interpret-rank`` (Grok fit).
+    When ``sheets_url`` is set, the card includes a spreadsheet fact + action
+    so channel members can open the full grid (Ingest / Ranked).
     """
     matched = filter_match_items(items, threshold=threshold)
     if not matched:
@@ -212,6 +254,10 @@ def build_match_alert_payload(
     )
     if hidden > 0:
         intro += f" Showing top {len(shown)}; **{hidden}** more not listed."
+    sheet_link = (sheets_url or "").strip()
+    if sheet_link.startswith(("http://", "https://")):
+        tab_hint = f" (tab **{sheets_tab}**)" if (sheets_tab or "").strip() else ""
+        intro += f" Full list in Google Sheets{tab_hint}."
 
     extra_body: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
@@ -261,6 +307,19 @@ def build_match_alert_payload(
     ]
     if run_url:
         facts.append({"title": "Run", "value": run_url})
+    if sheet_link.startswith(("http://", "https://")):
+        facts.append({"title": "Google Sheet", "value": sheet_link})
+        if (sheets_tab or "").strip():
+            facts.append({"title": "Sheet tab", "value": str(sheets_tab).strip()})
+        # Prefer sheet CTA first so it survives action truncation.
+        actions.insert(
+            0,
+            {
+                "type": "Action.OpenUrl",
+                "title": _truncate(sheets_cta_label, 40) or "Open Google Sheet",
+                "url": sheet_link,
+            },
+        )
 
     # Adaptive Cards: too many actions can be dropped by Teams; keep first 6.
     return build_adaptive_card_payload(
@@ -298,37 +357,121 @@ def build_ingest_alert_payload(
     return build_adaptive_card_payload(title=title, facts=facts)
 
 
-def post_teams_webhook(
+def post_json_webhook(
     webhook_url: str,
     payload: Mapping[str, Any],
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    channel_label: str = "webhook",
 ) -> None:
-    """POST JSON payload to Teams Workflows webhook URL.
+    """POST JSON payload to an Incoming Webhook / Workflows URL.
 
     Raises ``NotifyError`` on transport / non-2xx responses.
     """
     if not webhook_url or not webhook_url.strip():
-        raise NotifyError("TEAMS_WEBHOOK_URL is empty")
+        raise NotifyError(f"{channel_label} URL is empty")
 
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         webhook_url.strip(),
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             if status is not None and int(status) >= 300:
-                raise NotifyError(f"Teams webhook returned HTTP {status}")
+                raise NotifyError(f"{channel_label} returned HTTP {status}")
     except urllib.error.HTTPError as exc:
-        raise NotifyError(f"Teams webhook HTTP error: {exc.code} {exc.reason}") from exc
+        raise NotifyError(
+            f"{channel_label} HTTP error: {exc.code} {exc.reason}"
+        ) from exc
     except urllib.error.URLError as exc:
-        raise NotifyError(f"Teams webhook request failed: {exc.reason}") from exc
+        raise NotifyError(f"{channel_label} request failed: {exc.reason}") from exc
     except TimeoutError as exc:
-        raise NotifyError("Teams webhook request timed out") from exc
+        raise NotifyError(f"{channel_label} request timed out") from exc
+
+
+def post_teams_webhook(
+    webhook_url: str,
+    payload: Mapping[str, Any],
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> None:
+    """POST JSON payload to Teams Workflows webhook URL."""
+    post_json_webhook(
+        webhook_url, payload, timeout=timeout, channel_label="Teams webhook"
+    )
+
+
+def post_slack_webhook(
+    webhook_url: str,
+    payload: Mapping[str, Any],
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> None:
+    """POST JSON to a legacy Slack Incoming Webhook URL."""
+    post_json_webhook(
+        webhook_url, payload, timeout=timeout, channel_label="Slack webhook"
+    )
+
+
+def post_slack_chat_message(
+    *,
+    bot_token: str,
+    channel: str,
+    text: str,
+    blocks: Sequence[Mapping[str, Any]] | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> None:
+    """Post via Slack Web API ``chat.postMessage`` (Slack CLI / Bolt bot token).
+
+    Requires ``slack-sdk`` (``pip install -e ".[slack]"``) and a bot token
+    ``xoxb-...`` with ``chat:write``, installed to the workspace. Channel is
+    an ID (``C...`` / ``G...``) or public channel name (``#alerts``).
+
+    See: https://docs.slack.dev/tools/slack-cli/ and Bolt Python env vars
+    ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN``.
+    """
+    token = (bot_token or "").strip()
+    ch = (channel or "").strip()
+    if not token:
+        raise NotifyError("SLACK_BOT_TOKEN is empty")
+    if not token.startswith("xoxb-"):
+        logger.warning(
+            "SLACK_BOT_TOKEN does not start with xoxb-; expected Slack CLI / "
+            "Bolt bot user OAuth token"
+        )
+    if not ch:
+        raise NotifyError("SLACK_CHANNEL_ID is empty")
+
+    try:
+        from slack_sdk import WebClient
+        from slack_sdk.errors import SlackApiError
+    except ImportError as exc:
+        raise NotifyError(
+            'slack-sdk not installed; run: pip install -e ".[slack]"'
+        ) from exc
+
+    client = WebClient(token=token, timeout=timeout)
+    try:
+        resp = client.chat_postMessage(
+            channel=ch,
+            text=text,
+            blocks=list(blocks) if blocks else None,
+        )
+    except SlackApiError as exc:
+        err = ""
+        if exc.response is not None:
+            err = str(exc.response.get("error") or exc.response)
+        raise NotifyError(f"Slack chat.postMessage failed: {err or exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — network / SDK
+        raise NotifyError(f"Slack Web API request failed: {exc}") from exc
+
+    if not getattr(resp, "get", lambda _k, _d=None: None)("ok", True):
+        # slack_sdk returns SlackResponse mapping-like
+        raise NotifyError(f"Slack chat.postMessage not ok: {resp}")
 
 
 def notify_ingest_alert(
@@ -386,6 +529,124 @@ def notify_ingest_alert(
     return True
 
 
+def build_slack_match_payload(
+    items: Sequence[MatchAlertItem],
+    *,
+    threshold: int = DEFAULT_MATCH_THRESHOLD,
+    source: str = "ingest",
+    run_url: str | None = None,
+    sheets_url: str | None = None,
+    sheets_tab: str | None = None,
+    max_items: int = DEFAULT_MATCH_MAX_ITEMS,
+    title_max_chars: int = DEFAULT_TITLE_MAX,
+    summary_max_chars: int = DEFAULT_SUMMARY_MAX,
+    card_title: str | None = None,
+    cta_label: str = "Open notice",
+    sheets_cta_label: str = "Open Google Sheet",
+) -> dict[str, Any]:
+    """Slack Block Kit payload for high-match opportunities (Incoming Webhook)."""
+    matched = filter_match_items(items, threshold=threshold)
+    if not matched:
+        raise NotifyError("no match items at or above threshold")
+
+    cap = max(1, int(max_items))
+    shown = matched[:cap]
+    hidden = len(matched) - len(shown)
+
+    if card_title:
+        header = card_title
+    elif source == "interpret-rank":
+        header = f"Grok fit matches (≥{threshold})"
+    else:
+        header = f"New opportunity matches (≥{threshold})"
+
+    # Slack header plain_text max ~150 chars
+    header = _truncate(header, 140)
+
+    intro = (
+        f"*{len(matched)}* high-match opportunit"
+        f"{'y' if len(matched) == 1 else 'ies'} "
+        f"(threshold *{threshold}/100*, source `{source}`). "
+        "Review links and act — store Status stays human-owned."
+    )
+    if hidden > 0:
+        intro += f" Showing top {len(shown)}; *{hidden}* more not listed."
+    if run_url:
+        intro += f"\nRun: <{run_url}|workflow>"
+    sheet_link = (sheets_url or "").strip()
+    if sheet_link.startswith(("http://", "https://")):
+        tab_hint = f" (tab *{sheets_tab}*)" if (sheets_tab or "").strip() else ""
+        intro += f"\nFull list: <{sheet_link}|Google Sheet>{tab_hint}"
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": header, "emoji": True},
+        },
+        {"type": "section", "text": {"type": "mrkdwn", "text": intro}},
+        {"type": "divider"},
+    ]
+
+    for idx, item in enumerate(shown, start=1):
+        t = _truncate(item.title, title_max_chars) or item.opportunity_id
+        summary = _truncate(item.summary, summary_max_chars)
+        buyer = _truncate(item.buyer, 80) or "—"
+        kws = _truncate(item.keywords, 100) or "—"
+        rec = (item.recommendation or "").strip()
+        link = (item.link or "").strip()
+        title_line = f"*<{link}|{t}>*" if link.startswith("http") else f"*{t}*"
+        rec_bit = f" · `{rec}`" if rec else ""
+        body = (
+            f"*#{idx} · {item.score}/100* ({item.score_kind}){rec_bit}\n"
+            f"{title_line}\n"
+            f"Buyer: {buyer} · ID: `{item.opportunity_id}`\n"
+            f"Keywords: {kws}"
+        )
+        if item.closing_date:
+            body += f"\nClosing: {item.closing_date}"
+        if summary:
+            body += f"\n>{summary}"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": body}})
+
+    # Action buttons (Slack limit: keep few). Sheet button first when present.
+    elements: list[dict[str, Any]] = []
+    if sheet_link.startswith(("http://", "https://")):
+        elements.append(
+            {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": _truncate(sheets_cta_label, 75) or "Open Google Sheet",
+                    "emoji": True,
+                },
+                "url": sheet_link,
+                "action_id": "open_google_sheet",
+            }
+        )
+    notice_budget = max(0, SLACK_MAX_ACTION_BUTTONS - len(elements))
+    for idx, item in enumerate(shown[:notice_budget], start=1):
+        link = (item.link or "").strip()
+        if not link.startswith(("http://", "https://")):
+            continue
+        elements.append(
+            {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": _truncate(f"{cta_label} #{idx}", 75),
+                    "emoji": True,
+                },
+                "url": link,
+                "action_id": f"open_notice_{idx}",
+            }
+        )
+    if elements:
+        blocks.append({"type": "actions", "elements": elements})
+
+    fallback = f"{header}: {len(matched)} match(es) ≥ {threshold}"
+    return {"text": fallback, "blocks": blocks}
+
+
 def notify_match_alerts(
     webhook_url: str | None,
     items: Sequence[MatchAlertItem],
@@ -393,6 +654,8 @@ def notify_match_alerts(
     threshold: int = DEFAULT_MATCH_THRESHOLD,
     source: str = "ingest",
     run_url: str | None = None,
+    sheets_url: str | None = None,
+    sheets_tab: str | None = None,
     max_items: int = DEFAULT_MATCH_MAX_ITEMS,
     enabled: bool = True,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
@@ -401,18 +664,18 @@ def notify_match_alerts(
     card_title: str | None = None,
     cta_label: str = "Open notice",
 ) -> bool:
-    """Post a capture-channel Adaptive Card for high-match opportunities.
+    """Post a Teams capture-channel Adaptive Card for high-match opportunities.
 
     Returns True when a card was POSTed successfully.
     Returns False when disabled, no webhook, no items above threshold, or POST fails.
     Does **not** write GITHUB_OUTPUT (ops double-notify handoff is separate).
     """
     if not enabled:
-        logger.info("Match notify disabled; skipping (source=%s)", source)
+        logger.info("Teams match notify disabled; skipping (source=%s)", source)
         return False
     if not webhook_url or not str(webhook_url).strip():
         logger.warning(
-            "Match notify skipped (source=%s): no TEAMS_MATCH_WEBHOOK_URL / "
+            "Teams match notify skipped (source=%s): no TEAMS_MATCH_WEBHOOK_URL / "
             "TEAMS_WEBHOOK_URL",
             source,
         )
@@ -421,7 +684,7 @@ def notify_match_alerts(
     matched = filter_match_items(items, threshold=threshold)
     if not matched:
         logger.info(
-            "Match notify: no items with score>=%s (source=%s, candidates=%s)",
+            "Teams match notify: no items with score>=%s (source=%s, candidates=%s)",
             threshold,
             source,
             len(items),
@@ -434,6 +697,8 @@ def notify_match_alerts(
             threshold=threshold,
             source=source,
             run_url=run_url,
+            sheets_url=sheets_url,
+            sheets_tab=sheets_tab,
             max_items=max_items,
             title_max_chars=title_max_chars,
             summary_max_chars=summary_max_chars,
@@ -446,12 +711,184 @@ def notify_match_alerts(
         return False
 
     logger.info(
-        "Teams match notify sent (source=%s, matches=%s, threshold=%s)",
+        "Teams match notify sent (source=%s, matches=%s, threshold=%s, sheets=%s)",
         source,
         len(matched),
         threshold,
+        bool(sheets_url),
     )
     return True
+
+
+def notify_slack_match_alerts(
+    items: Sequence[MatchAlertItem],
+    *,
+    bot_token: str | None = None,
+    channel_id: str | None = None,
+    webhook_url: str | None = None,
+    threshold: int = DEFAULT_MATCH_THRESHOLD,
+    source: str = "ingest",
+    run_url: str | None = None,
+    sheets_url: str | None = None,
+    sheets_tab: str | None = None,
+    max_items: int = DEFAULT_MATCH_MAX_ITEMS,
+    enabled: bool = True,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    title_max_chars: int = DEFAULT_TITLE_MAX,
+    summary_max_chars: int = DEFAULT_SUMMARY_MAX,
+    card_title: str | None = None,
+    cta_label: str = "Open notice",
+) -> bool:
+    """Post a Slack Block Kit message for high-match opportunities.
+
+    **Preferred (Slack CLI / Bolt):** ``bot_token`` (``SLACK_BOT_TOKEN``) +
+    ``channel_id`` (``SLACK_CHANNEL_ID``) → Web API ``chat.postMessage``.
+
+    **Legacy fallback:** Incoming Webhook ``webhook_url`` if bot token unset.
+
+    Returns True on successful post. Does not set GITHUB_OUTPUT.
+    """
+    if not enabled:
+        logger.info("Slack match notify disabled; skipping (source=%s)", source)
+        return False
+
+    matched = filter_match_items(items, threshold=threshold)
+    if not matched:
+        logger.info(
+            "Slack match notify: no items with score>=%s (source=%s, candidates=%s)",
+            threshold,
+            source,
+            len(items),
+        )
+        return False
+
+    try:
+        payload = build_slack_match_payload(
+            matched,
+            threshold=threshold,
+            source=source,
+            run_url=run_url,
+            sheets_url=sheets_url,
+            sheets_tab=sheets_tab,
+            max_items=max_items,
+            title_max_chars=title_max_chars,
+            summary_max_chars=summary_max_chars,
+            card_title=card_title,
+            cta_label=cta_label,
+        )
+    except NotifyError as exc:
+        logger.error("Slack match payload failed (source=%s): %s", source, exc)
+        return False
+
+    token = (bot_token or "").strip()
+    channel = (channel_id or "").strip()
+    hook = (webhook_url or "").strip()
+
+    try:
+        if token and channel:
+            post_slack_chat_message(
+                bot_token=token,
+                channel=channel,
+                text=str(payload.get("text") or "Opportunity matches"),
+                blocks=payload.get("blocks"),  # type: ignore[arg-type]
+                timeout=timeout,
+            )
+            mode = "web_api"
+        elif hook:
+            logger.warning(
+                "Slack match using legacy Incoming Webhook; prefer Slack CLI "
+                "SLACK_BOT_TOKEN + SLACK_CHANNEL_ID (see scripts/slack_cli_setup.md)"
+            )
+            post_slack_webhook(hook, payload, timeout=timeout)
+            mode = "webhook"
+        else:
+            logger.warning(
+                "Slack match notify skipped (source=%s): set SLACK_BOT_TOKEN + "
+                "SLACK_CHANNEL_ID (Slack CLI/Bolt) or legacy SLACK_WEBHOOK_URL",
+                source,
+            )
+            return False
+    except NotifyError as exc:
+        logger.error("Slack match notify failed (source=%s): %s", source, exc)
+        return False
+
+    logger.info(
+        "Slack match notify sent (source=%s, mode=%s, matches=%s, threshold=%s, sheets=%s)",
+        source,
+        mode,
+        len(matched),
+        threshold,
+        bool(sheets_url),
+    )
+    return True
+
+
+def dispatch_match_notifications(
+    items: Sequence[MatchAlertItem],
+    *,
+    threshold: int = DEFAULT_MATCH_THRESHOLD,
+    source: str = "ingest",
+    run_url: str | None = None,
+    sheets_url: str | None = None,
+    sheets_tab: str | None = None,
+    max_items: int = DEFAULT_MATCH_MAX_ITEMS,
+    teams_webhook_url: str | None = None,
+    teams_enabled: bool = True,
+    slack_bot_token: str | None = None,
+    slack_channel_id: str | None = None,
+    slack_webhook_url: str | None = None,
+    slack_enabled: bool = True,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> MatchNotifyResult:
+    """Send high-match alerts to Teams and/or Slack (same score criteria).
+
+    Slack prefers bot token + channel (CLI/Bolt); webhook is legacy fallback.
+    When ``sheets_url`` is set, cards include an Open Google Sheet CTA.
+    """
+    matched = filter_match_items(items, threshold=threshold)
+    result = MatchNotifyResult(match_count=len(matched))
+    if not matched:
+        result.details["reason"] = "no_items_above_threshold"
+        return result
+
+    if teams_enabled:
+        result.teams_posted = notify_match_alerts(
+            teams_webhook_url,
+            matched,
+            threshold=threshold,
+            source=source,
+            run_url=run_url,
+            sheets_url=sheets_url,
+            sheets_tab=sheets_tab,
+            max_items=max_items,
+            enabled=True,
+            timeout=timeout,
+        )
+        result.details["teams"] = "posted" if result.teams_posted else "failed_or_skipped"
+    else:
+        result.details["teams"] = "disabled"
+
+    if slack_enabled:
+        result.slack_posted = notify_slack_match_alerts(
+            matched,
+            bot_token=slack_bot_token,
+            channel_id=slack_channel_id,
+            webhook_url=slack_webhook_url,
+            threshold=threshold,
+            source=source,
+            run_url=run_url,
+            sheets_url=sheets_url,
+            sheets_tab=sheets_tab,
+            max_items=max_items,
+            enabled=True,
+            timeout=timeout,
+        )
+        result.details["slack"] = "posted" if result.slack_posted else "failed_or_skipped"
+    else:
+        result.details["slack"] = "disabled"
+
+    result.any_posted = bool(result.teams_posted or result.slack_posted)
+    return result
 
 
 def match_items_from_opportunity_fields(

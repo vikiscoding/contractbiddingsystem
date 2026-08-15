@@ -1,6 +1,6 @@
 # Engineering-owned company objectives for Grok-assisted interpret-rank.
-# Source of truth for WHO we are: Atlas Flow Group public site (crawled 2026-08-11).
-#   https://atlasflowgroupwebsite.vikrant-singh1.workers.dev/
+# Source of truth for company positioning: Atlas Flow Group public site (reviewed 2026-08-11).
+#   https://www.atlasflowgroup.com/
 #   Pages: /, /services, /approach, /about, /contact
 # Align keyword groups in config/keywords.yaml with these objectives.
 #
@@ -10,7 +10,7 @@ version: 2
 
 company:
   name: "Atlas Flow Group"
-  website: "https://atlasflowgroupwebsite.vikrant-singh1.workers.dev/"
+  website: "https://www.atlasflowgroup.com/"
   email: "hello@atlasflowgroup.com"
   summary: >
     SMB-focused advisory and Microsoft-native enablement firm. We design
@@ -18,7 +18,7 @@ company:
     control, and every material decision is traceable by design. Lead with
     advisory (authority, operating model, governance readiness), then
     implement Copilot / Power Platform / M365 workflows under that model —
-    not tool sprawl, not unowned AI, not large multi-year SI theatre.
+    not tool sprawl, not unowned AI, not large multi-year systems-integrator programmes.
   geography: >
     Canada-oriented public and private buyers are in scope when the work is
     operating-model, process, Microsoft-native AI enablement, or human-governed
@@ -26,7 +26,7 @@ company:
     footprints are a poor fit.
   posture: >
     One Authority · Human Governed · Traceable by Design. Authority before
-    automation. AI assistance without authority. Implementation over slideware.
+    automation. AI assistance without authority. Implementation over presentation-only deliverables.
     Not a pure product vendor, not a classic MSP/service desk outsourcer,
     not ServiceNow platform SI, not construction/facilities/commodities.
 
@@ -76,7 +76,7 @@ objectives:
       remain accountable. Strong fit for AI governance, responsible AI,
       Copilot adoption with decision rights, and anti-patterns of unowned AI.
       Weak fit for pure GenAI product platforms, AI that replaces ownership,
-      or hype-driven transformation without governance.
+      or speculative transformation without governance.
 
   - id: knowledge_flow
     label: "Traceable operating flow & continuous improvement"
@@ -98,13 +98,13 @@ guidance:
     - "Services categories (*SRV) with real ops/IT/process scope"
   deprioritize:
     - "Construction, facilities, elevator, snow/ice, food/beverage design, pure advertising creative"
-    - "Classic MSP / service desk / desktop outsourcing as the core SOW (not our offer)"
-    - "ServiceNow / ITSM platform implementation as primary scope (not on our site)"
-    - "Specialized product platforms (e.g. third-party risk intelligence SaaS) unless we partner"
+    - "Classic MSP / service desk / desktop outsourcing as the core SOW (outside published services)"
+    - "ServiceNow / ITSM platform implementation as primary scope (not a published capability)"
+    - "Specialized product platforms (e.g. third-party risk intelligence SaaS) unless a partnership is in scope"
     - "Military payroll / niche HRIS sustainment without ops-model angle"
     - "Keyword false positives with no operating-model or Microsoft-native scope"
     - "Buyers who want AI to replace human ownership"
-    - "Hype AI transformation without governance"
+    - "Speculative AI transformation without governance"
   output_tone: >
     Plain language for an Atlas Flow Group capture lead. Lead with whether the
     buyer needs authority/governance design and/or Microsoft-native enablement

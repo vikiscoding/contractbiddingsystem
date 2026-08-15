@@ -5,6 +5,7 @@ Operator guide for day-1 SQLite storage, Status triage, calibration, create caps
 **Audience:** operators who review opportunities and manage the daily schedule.  
 **Engineering owns:** `config/keywords.yaml`, pipeline code, GitHub workflow YAML.  
 **First-time plug-in (keys, Grok, Teams, function list, roadmap):** **[PLUG_AND_PLAY.md](../docs/PLUG_AND_PLAY.md)**.  
+**What this app is (processor role, triggers, flow):** **[PROCESSOR_OVERVIEW.md](../docs/PROCESSOR_OVERVIEW.md)**.  
 **LLM / data rules:** [AGENTS.md](../AGENTS.md), [DATA_UPDATE_DIRECTIVES](../docs/DATA_UPDATE_DIRECTIVES.md), [AS_BUILT](../docs/AS_BUILT.md).  
 **Related:** [README.md](../README.md), [google_sheets_setup.md](google_sheets_setup.md), [provision_sharepoint_list.md](provision_sharepoint_list.md), [daily_sync.ps1](daily_sync.ps1), [BACKLOG.md](../docs/BACKLOG.md).
 
@@ -450,8 +451,13 @@ Only **`--write`** on `run` persists opportunities. Default (and `--dry-run`) ne
 | `PARTIAL_ERROR_EXIT_THRESHOLD` | `5` | Exit 1 + notify |
 | `TEAMS_WEBHOOK_URL` | — | Ops alerts (fail/streak); also match fallback |
 | `TEAMS_MATCH_WEBHOOK_URL` | — | Optional dedicated capture channel |
-| `TEAMS_MATCH_SCORE_THRESHOLD` | `40` | Ping when RelevanceScore or Grok fit ≥ N |
-| `TEAMS_MATCH_NOTIFY_ENABLED` | `true` | Master switch for match pings |
+| `TEAMS_MATCH_SCORE_THRESHOLD` | `40` | Ping when RelevanceScore or Grok fit ≥ N (Teams + Slack) |
+| `TEAMS_MATCH_NOTIFY_ENABLED` | `true` | Master switch for Teams match pings |
+| `SLACK_BOT_TOKEN` | — | CLI/Bolt `xoxb-` bot token (preferred) |
+| `SLACK_CHANNEL_ID` | — | Channel for `chat.postMessage` |
+| `SLACK_APP_TOKEN` | — | Optional `xapp-` (Socket Mode only) |
+| `SLACK_WEBHOOK_URL` | — | Legacy Incoming Webhook fallback |
+| `SLACK_MATCH_NOTIFY_ENABLED` | `true` | Master switch for Slack match pings |
 | `KEYWORDS_PATH` | `config/keywords.yaml` | Eng-owned ingest filter |
 | `OBJECTIVES_PATH` | `config/objectives.yaml` | Eng-owned Grok frame |
 | `XAI_API_KEY` | — | Required for interpret-rank |
