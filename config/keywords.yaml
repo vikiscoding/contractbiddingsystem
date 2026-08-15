@@ -1,106 +1,138 @@
 # Engineering-owned keyword config for CanadaBuys open-tender filtering.
-# Ops requests changes via GitHub issues; eng reviews/merges.
-# Do not add bare "teams" or "strategy" — use multi-word / scoped terms only.
+# Tuned for Atlas Flow Group capabilities (public site review 2026-08-11):
+#   https://www.atlasflowgroup.com/
+# Ops request changes via GitHub issues; eng reviews/merges.
+#
+# Atlas Flow Group is NOT a classic MSP / ServiceNow SI / construction vendor.
+# Prefer: operating-model advisory, human-governed AI, Microsoft-native enablement
+#   (M365, Copilot, Power Platform), process/workflow under authority design.
+# Avoid bare high-noise terms (teams, strategy, service desk alone).
 #
 # Matching notes:
 # - Short terms (len <= short_term_max_len) use word-boundary regex.
-# - Unique-by-term weights; nested overlaps are span-aware: a shorter term is
-#   dropped only when every hit is covered by a longer term's span (e.g.
-#   "managed service" inside "managed services"). Independent shorter hits
-#   still count (e.g. "workflow automation and general automation").
-# - Terms dual-listed across groups (e.g. "power automate") contribute one
-#   weight but attribute all declaring groups for diversity scoring.
+# - Unique-by-term weights; nested overlaps are span-aware.
+# - Terms dual-listed across groups contribute one weight but all groups for scoring.
 version: 1
 match:
   case_sensitive: false
-  fields: ["title", "description"]  # honored by loader (title | description)
+  fields: ["title", "description"]
   search_category: true
   short_term_max_len: 4
 
 groups:
+  # Critical — site: "Microsoft-native", M365, Copilot, Power Platform
   microsoft_cloud:
-    label: "Microsoft / M365 / Power Platform / Azure / Copilot"
+    label: "Microsoft-native (M365 / Copilot / Power Platform / Azure)"
     keywords:
-      - { term: "microsoft 365", weight: 20 }
-      - { term: "microsoft365", weight: 20 }
-      - { term: "m365", weight: 18 }
+      - { term: "microsoft 365", weight: 22 }
+      - { term: "microsoft365", weight: 22 }
+      - { term: "m365", weight: 20 }
       - { term: "office 365", weight: 18 }
       - { term: "o365", weight: 15 }
+      - { term: "microsoft-native", weight: 20 }
+      - { term: "microsoft native", weight: 20 }
       - { term: "sharepoint", weight: 16 }
-      - { term: "power platform", weight: 20 }
-      - { term: "power apps", weight: 18 }
-      - { term: "power automate", weight: 18 }
-      - { term: "power bi", weight: 14 }
-      - { term: "dynamics 365", weight: 16 }
-      - { term: "copilot", weight: 20 }
-      - { term: "azure", weight: 14 }
-      - { term: "entra id", weight: 12 }
+      - { term: "power platform", weight: 22 }
+      - { term: "power apps", weight: 20 }
+      - { term: "power automate", weight: 20 }
+      - { term: "power bi", weight: 12 }
+      - { term: "copilot", weight: 22 }
+      - { term: "microsoft copilot", weight: 22 }
+      - { term: "azure", weight: 12 }
+      - { term: "entra id", weight: 14 }
       - { term: "active directory", weight: 10 }
       - { term: "microsoft teams", weight: 12 }
+      - { term: "dynamics 365", weight: 10 }
 
-  managed_services:
-    label: "Managed services"
+  # Critical — site: Authority, operating model, source of truth, runbooks, registries
+  operating_authority:
+    label: "Operating model / authority / governance design"
     keywords:
-      - { term: "managed service", weight: 16 }
-      - { term: "managed services", weight: 16 }
-      - { term: "msp", weight: 10 }
-      - { term: "managed it", weight: 14 }
-      - { term: "outsourcing", weight: 10 }
-      - { term: "service desk", weight: 14 }
-      - { term: "end user computing", weight: 12 }
-      - { term: "desktop support", weight: 12 }
-      - { term: "device management", weight: 12 }
-      - { term: "intune", weight: 14 }
+      - { term: "operating model", weight: 22 }
+      - { term: "operating system", weight: 12 }
+      - { term: "source of truth", weight: 18 }
+      - { term: "source of authority", weight: 20 }
+      - { term: "decision rights", weight: 16 }
+      - { term: "operating contract", weight: 18 }
+      - { term: "operating contracts", weight: 18 }
+      - { term: "runbook", weight: 14 }
+      - { term: "runbooks", weight: 14 }
+      - { term: "governance model", weight: 16 }
+      - { term: "governance framework", weight: 16 }
+      - { term: "corporate governance", weight: 10 }
+      - { term: "operational governance", weight: 18 }
+      - { term: "process governance", weight: 16 }
+      - { term: "business process", weight: 12 }
+      - { term: "process design", weight: 14 }
+      - { term: "process discipline", weight: 14 }
+      - { term: "traceability", weight: 12 }
+      - { term: "accountability", weight: 10 }
 
-  itsm_servicenow:
-    label: "ITSM / ServiceNow"
-    keywords:
-      - { term: "servicenow", weight: 20 }
-      - { term: "service now", weight: 18 }
-      - { term: "itsm", weight: 16 }
-      - { term: "itil", weight: 12 }
-      - { term: "incident management", weight: 12 }
-      - { term: "service management", weight: 14 }
-      - { term: "cmdb", weight: 12 }
-
+  # High — lead offering on /services
   advisory_consulting:
-    label: "Advisory / Consulting (ops)"
+    label: "Advisory / operating-model consulting"
     keywords:
+      - { term: "advisory services", weight: 18 }
+      - { term: "advisory service", weight: 16 }
       - { term: "management consulting", weight: 12 }
-      - { term: "advisory services", weight: 12 }
       - { term: "professional services", weight: 10 }
-      - { term: "digital transformation", weight: 14 }
-      - { term: "operating model", weight: 12 }
-      - { term: "change management", weight: 10 }
+      - { term: "digital transformation", weight: 12 }
+      - { term: "change management", weight: 12 }
       - { term: "business analysis", weight: 10 }
+      - { term: "operations assessment", weight: 16 }
+      - { term: "organisational design", weight: 12 }
+      - { term: "organizational design", weight: 12 }
+      - { term: "business transformation", weight: 12 }
 
+  # High — site: automation & agents only under human authority
   automation_process:
-    label: "Automation / Process improvement"
+    label: "Workflow automation / agents under governance"
     keywords:
-      - { term: "automation", weight: 14 }
-      - { term: "rpa", weight: 14 }
-      - { term: "robotic process", weight: 16 }
+      - { term: "workflow automation", weight: 18 }
+      - { term: "workflow design", weight: 16 }
+      - { term: "process automation", weight: 16 }
       - { term: "process improvement", weight: 14 }
-      - { term: "workflow automation", weight: 12 }
+      - { term: "business process automation", weight: 16 }
+      - { term: "robotic process", weight: 12 }
+      - { term: "rpa", weight: 12 }
+      - { term: "low code", weight: 14 }
+      - { term: "no code", weight: 12 }
+      - { term: "power automate", weight: 20 }
       - { term: "orchestration", weight: 10 }
-      - { term: "low code", weight: 12 }
-      - { term: "no code", weight: 10 }
-      - { term: "power automate", weight: 18 }
+      - { term: "intelligent automation", weight: 14 }
+      # Bare "automation" kept moderate — many false friends in construction notices
+      - { term: "automation", weight: 10 }
 
+  # High — site: human-governed AI, AI assistance without authority (not unowned GenAI product)
   ai_operations:
-    label: "AI + operations / AI governance"
+    label: "Human-governed AI / AI assistance / responsible AI"
     keywords:
-      - { term: "artificial intelligence", weight: 16 }
-      - { term: "machine learning", weight: 14 }
-      - { term: "generative ai", weight: 18 }
-      - { term: "genai", weight: 16 }
-      - { term: "ai governance", weight: 18 }
-      - { term: "responsible ai", weight: 16 }
-      - { term: "llm", weight: 14 }
-      - { term: "ai operations", weight: 16 }
-      - { term: "mlops", weight: 14 }
-      - { term: "data governance", weight: 12 }
+      - { term: "artificial intelligence", weight: 14 }
+      - { term: "generative ai", weight: 16 }
+      - { term: "genai", weight: 14 }
+      - { term: "ai governance", weight: 22 }
+      - { term: "responsible ai", weight: 20 }
+      - { term: "ai assistance", weight: 18 }
+      - { term: "human in the loop", weight: 16 }
+      - { term: "human-in-the-loop", weight: 16 }
+      - { term: "ai adoption", weight: 14 }
+      - { term: "ai enablement", weight: 16 }
+      - { term: "llm", weight: 12 }
+      - { term: "machine learning", weight: 10 }
+      - { term: "data governance", weight: 14 }
+      - { term: "ai operations", weight: 12 }
 
+  # Low / selective — only when notice is really about knowledge ops / continuous improvement loops
+  knowledge_flow:
+    label: "Knowledge / continuous operating flow"
+    keywords:
+      - { term: "knowledge management", weight: 12 }
+      - { term: "knowledge base", weight: 10 }
+      - { term: "continuous improvement", weight: 12 }
+      - { term: "operational excellence", weight: 12 }
+      - { term: "shared services", weight: 10 }
+
+# Prefer services-style procurement categories (not construction).
 category_boosts:
   "*SRV": 5
   "SRV": 5

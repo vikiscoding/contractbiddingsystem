@@ -21,6 +21,8 @@ build/
 # Local data / state / logs (keep directory placeholders)
 data/*.db
 data/*.csv
+data/rankings/
+data/atlas_crawl/
 !data/.gitkeep
 logs/*
 !logs/.gitkeep

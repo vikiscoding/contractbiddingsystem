@@ -32,6 +32,8 @@ def test_cli_parser_has_frozen_subcommands():
         "check-store",
         "export-csv",
         "sync-sheets",
+        "interpret-rank",
+        "sync-rank-sheets",
     }
 
 

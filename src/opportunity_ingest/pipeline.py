@@ -27,7 +27,11 @@ from opportunity_ingest.filter_keywords import (
 )
 from opportunity_ingest.map_fields import MapError, map_to_opportunity_fields
 from opportunity_ingest.models import ExistingKeys, OpportunityFields
-from opportunity_ingest.notify import notify_ingest_alert
+from opportunity_ingest.notify import (
+    dispatch_match_notifications,
+    match_items_from_opportunity_fields,
+    notify_ingest_alert,
+)
 from opportunity_ingest.parse import ParseError, parse_csv_file, parse_csv_text
 from opportunity_ingest.score import compute_score
 from opportunity_ingest.state import (
@@ -77,6 +81,9 @@ class RunMetrics:
     exit_code: int = EXIT_OK
     notified: bool = False
     notify_reason: str | None = None
+    match_notified: bool = False
+    match_notify_count: int = 0
+    slack_match_notified: bool = False
     csv_source: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -201,14 +208,19 @@ def _process_candidates(
     keys: ExistingKeys,
     budget: AttemptBudget,
     write: bool,
-) -> dict[str, int]:
-    """Dedupe + create loop. On dry-run, counts would-create without store writes."""
+) -> dict[str, Any]:
+    """Dedupe + create loop. On dry-run, counts would-create without store writes.
+
+    Write path also returns ``created``: list of successfully created OpportunityFields
+    (for Teams high-match pings).
+    """
     added = 0
     errors = 0
     skipped_dup = 0
     skipped_max = 0
     would_create = 0
     attempts = 0
+    created: list[OpportunityFields] = []
 
     for fields in candidates:
         if is_duplicate(fields.OpportunityID, fields.Link, keys):
@@ -264,6 +276,7 @@ def _process_candidates(
         else:
             register_created(keys, fields.OpportunityID, fields.Link)
             added += 1
+            created.append(fields)
             logger.info(
                 "Created opportunity %s (score=%s)",
                 fields.OpportunityID,
@@ -277,6 +290,7 @@ def _process_candidates(
         "skipped_max_create": skipped_max,
         "would_create": would_create,
         "attempts": attempts,
+        "created": created,
     }
 
 
@@ -395,6 +409,7 @@ def run_pipeline(
         metrics.skipped_max_create_count = stats["skipped_max_create"]
         metrics.would_create_count = stats["would_create"]
         metrics.create_attempts = stats["attempts"]
+        created_fields: list[OpportunityFields] = list(stats.get("created") or [])
 
         # Streak: write runs only (UTC calendar-day semantics).
         streak_reached = False
@@ -451,9 +466,38 @@ def run_pipeline(
                 extra_facts=extra,
             )
 
+        # High-match capture pings → Teams and/or Slack (new creates only).
+        if write and created_fields and (
+            settings.teams_match_notify_enabled or settings.slack_match_notify_enabled
+        ):
+            thr = int(settings.teams_match_score_threshold)
+            match_items = match_items_from_opportunity_fields(
+                created_fields, threshold=thr
+            )
+            metrics.match_notify_count = len(match_items)
+            if match_items:
+                dispatched = dispatch_match_notifications(
+                    match_items,
+                    threshold=thr,
+                    source="ingest",
+                    run_url=settings.github_run_url,
+                    sheets_url=settings.resolved_google_sheet_url(),
+                    sheets_tab=settings.google_sheet_tab or "Ingest",
+                    max_items=int(settings.teams_match_max_items),
+                    teams_webhook_url=settings.resolved_match_webhook_url(),
+                    teams_enabled=bool(settings.teams_match_notify_enabled),
+                    slack_bot_token=settings.resolved_slack_bot_token(),
+                    slack_channel_id=settings.resolved_slack_channel_id(),
+                    slack_webhook_url=settings.resolved_slack_match_webhook_url(),
+                    slack_enabled=bool(settings.slack_match_notify_enabled),
+                )
+                metrics.match_notified = dispatched.teams_posted
+                metrics.slack_match_notified = dispatched.slack_posted
+
         logger.info(
             "Run complete: write=%s added=%s errors=%s would_create=%s "
-            "skipped_dup=%s skipped_max=%s exit=%s notified=%s",
+            "skipped_dup=%s skipped_max=%s exit=%s notified=%s "
+            "match_notified=%s slack_match_notified=%s match_count=%s",
             write,
             metrics.added_count,
             metrics.error_count,
@@ -462,6 +506,9 @@ def run_pipeline(
             metrics.skipped_max_create_count,
             metrics.exit_code,
             metrics.notified,
+            metrics.match_notified,
+            metrics.slack_match_notified,
+            metrics.match_notify_count,
         )
 
     except PipelineHardFail as exc:

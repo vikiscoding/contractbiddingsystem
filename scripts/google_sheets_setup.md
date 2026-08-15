@@ -26,7 +26,7 @@ Use a separate tab (e.g. **Review**) for manual notes so they are not wiped.
 - Python package extras for Sheets:
 
 ```powershell
-cd "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
+cd <repository-root>
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[sheets]"
 ```
@@ -96,7 +96,8 @@ You will share the Sheet with this address.
 1. Open [Google Sheets](https://sheets.google.com) → **Blank** spreadsheet.
 2. Rename the file, e.g. **Contract Opportunities**.
 3. Rename the first tab to **`Ingest`** (or leave default and set `GOOGLE_SHEET_TAB` later).
-4. Optional: add a second tab **`Review`** for human notes (job will not touch it if you only sync `Ingest`).
+4. Optional: add a **`Ranked`** tab for Grok interpret-rank output (created automatically on first rank sync if missing). Do **not** put rankings on `Ingest`.
+5. Optional: add a **`Review`** tab for human notes (pipeline will not touch it if you only sync `Ingest` / `Ranked`).
 
 ### B2. Share the sheet with the service account
 
@@ -139,7 +140,9 @@ DATA_DIR=data
 
 GOOGLE_SHEET_ID=1abc...your_id...xyz
 GOOGLE_SHEET_TAB=Ingest
+GOOGLE_SHEET_RANK_TAB=Ranked
 GOOGLE_SERVICE_ACCOUNT_FILE=secrets/google-service-account.json
+# Optional Grok (separate extra): XAI_API_KEY=...
 ```
 
 **Do not** commit `.env` or the JSON key.
@@ -165,7 +168,7 @@ Or override flags:
 python -m opportunity_ingest sync-sheets --sheet-id "1abc..." --tab Ingest
 ```
 
-Expected success line:
+Expected success line (Ingest):
 
 ```text
 Synced 10 rows to sheet 1abc... tab 'Ingest'
@@ -174,29 +177,38 @@ Synced 10 rows to sheet 1abc... tab 'Ingest'
 Open the Google Sheet in the browser → **Ingest** tab should show headers + rows  
 (Title, OpportunityID, Link, RelevanceScore, Status, …).
 
+### D2. Grok Ranked tab (optional)
+
+Same spreadsheet and service account. Rankings never write to **Ingest**.
+
+```powershell
+pip install -e ".[ai]"
+# XAI_API_KEY in root .env
+python -m opportunity_ingest interpret-rank --status New --limit 20
+# or re-push last local report without calling Grok:
+python -m opportunity_ingest sync-rank-sheets
+```
+
+- Creates/replaces tab **`Ranked`** (or `GOOGLE_SHEET_RANK_TAB`).  
+- Local copies: `data/rankings/interpret-*.md`.  
+- Skip sheet push: `--no-sync-sheets`.  
+- Full human checklist (all features): [`docs/PLUG_AND_PLAY.md`](../docs/PLUG_AND_PLAY.md).
+- Architecture: [`docs/AS_BUILT.md`](../docs/AS_BUILT.md). Unbuilt ideas: [`docs/BACKLOG.md`](../docs/BACKLOG.md).
+
 ---
 
 ## Part E — Daily automatic update
 
-### Option 1 — Windows Task Scheduler (your PC)
+### Option 1 — Windows Task Scheduler (operator workstation)
 
-1. Create `scripts\daily_sync.ps1`:
-
-```powershell
-Set-Location "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
-& .\.venv\Scripts\Activate.ps1
-python -m opportunity_ingest run --write --max-create 50
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-python -m opportunity_ingest sync-sheets
-exit $LASTEXITCODE
-```
+1. Use the checked-in script `scripts\daily_sync.ps1` (it changes to the repository root from its own location).
 
 2. Task Scheduler → **Create Basic Task** → Daily after ~9:30 AM Eastern  
    (CanadaBuys refreshes earlier; 10:00 AM local is a safe start).
 3. Action: start program  
    `powershell.exe`  
    Arguments:  
-   `-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem\scripts\daily_sync.ps1"`
+   `-NoProfile -ExecutionPolicy Bypass -File "<repository-root>\scripts\daily_sync.ps1"`
 
 PC must be on at that time.
 

@@ -5,7 +5,8 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "...\scripts\daily_sync.ps1"
 
 $ErrorActionPreference = "Stop"
-Set-Location "C:\Users\Vikrant\Documents\Agentic AI Learning\contractbiddingsystem"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
 
 if (Test-Path .\.venv\Scripts\Activate.ps1) {
     & .\.venv\Scripts\Activate.ps1
